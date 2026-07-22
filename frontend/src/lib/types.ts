@@ -134,7 +134,7 @@ export type SessionEvent =
  * The two acoustic models a session can pick between (mirrors tajwid.asr.engine —
  * "mock" exists on the backend too, but it's a no-GPU dev fallback, not a user choice).
  */
-export type EngineChoice = "real" | "zipformer";
+export type EngineChoice = "real" | "zipformer" | "remote";
 
 export type HealthInfo = {
   status: string;

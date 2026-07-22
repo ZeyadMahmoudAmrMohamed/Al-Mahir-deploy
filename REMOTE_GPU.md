@@ -9,6 +9,69 @@ after a few hours, and every waqf pays a network round trip.
 
 ---
 
+## Every session, in five cells
+
+Kaggle wipes the disk between sessions, so the clone and install repeat each time. Set
+**Accelerator: GPU T4 x2** and **Internet: On** in the sidebar first, and add `GH_TOKEN`
+and `NGROK_TOKEN` under Add-ons → Secrets.
+
+The rest of this file explains what these do and how to recover when one misbehaves.
+
+```python
+# 1. Code + deps  (~2 min)
+from kaggle_secrets import UserSecretsClient
+token = UserSecretsClient().get_secret("GH_TOKEN")
+!git clone --depth 1 https://{token}@github.com/3omdawy11/Al-Mahir-Mobile-Ready.git /kaggle/working/almahir
+!rm -rf /kaggle/working/almahir/frontend /kaggle/working/almahir/backend/data
+%cd /kaggle/working/almahir/backend
+!pip install -q -e . 2>&1 | tail -2
+```
+
+```python
+# 2. Server  (~10 s)
+import subprocess, time
+subprocess.run(["pkill", "-f", "remote_server.py"]); time.sleep(3)
+log = open("/kaggle/working/server.log", "w")
+server = subprocess.Popen(["python", "remote_server.py", "--port", "8200"],
+                          stdout=log, stderr=subprocess.STDOUT, text=True)
+time.sleep(10)
+print(subprocess.run(["curl","-s","localhost:8200/health"], capture_output=True, text=True).stdout)
+```
+
+```python
+# 3. Tunnel — `domain=` pins the URL so backend/.env never changes
+!pip install -q pyngrok
+from pyngrok import ngrok
+ngrok.set_auth_token(UserSecretsClient().get_secret("NGROK_TOKEN"))
+url = ngrok.connect(8200, "http", domain="qualm-mountable-cultivate.ngrok-free.dev").public_url
+print("TAJWID_REMOTE_URL=" + url.replace("https://","wss://") + "/infer")
+```
+
+```python
+# 4. Warm the model  (~2-4 min — the slow step, and the only one worth waiting on)
+!curl -s -X POST localhost:8200/warmup-async
+```
+
+```python
+# 5. Keep alive — leave running for the whole demo
+import time
+while True: time.sleep(60)
+```
+
+Check progress from a scratch cell whenever you like:
+
+```python
+!tail -5 /kaggle/working/server.log
+!curl -s localhost:8200/health
+```
+
+Ready when the log says `Muaalem ready on cuda:0` and health says `"loaded": true`.
+
+Locally: nothing to do. `backend/.env` already holds the pinned URL, so start
+`tajwid-serve`, open the frontend, and pick **المُعلِّم (سحابي)** from the engine picker.
+
+---
+
 ## Where the seam is
 
 ```
@@ -84,16 +147,28 @@ print(torch.__version__, torch.cuda.is_available(), torch.cuda.get_device_name(0
 Kaggle's preinstalled torch is already CUDA-enabled. If this prints `False`, the
 accelerator is not on.
 
-**Cell 3, start the server in the background:**
+**Cell 3, start the server in the background.** This cell returns in about ten seconds; if
+it does not, the server failed to start and the log will say why.
 
 ```python
 import subprocess, time
+
+# Logs go to a FILE, not subprocess.PIPE. A pipe nobody reads fills its OS buffer at
+# around 64 kB and then blocks the server on its next print, which looks like a hang
+# with no error anywhere. Model loading logs more than that.
+log = open("/kaggle/working/server.log", "w")
 server = subprocess.Popen(
     ["python", "remote_server.py", "--port", "8200"],
-    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+    stdout=log, stderr=subprocess.STDOUT, text=True,
 )
-time.sleep(8)
+time.sleep(10)
 print(subprocess.run(["curl", "-s", "localhost:8200/health"], capture_output=True, text=True).stdout)
+```
+
+Watch the server from any cell, any time:
+
+```python
+!tail -20 /kaggle/working/server.log
 ```
 
 **Cell 4a, expose it with Cloudflare** (no account, no token):
@@ -131,14 +206,34 @@ print("TAJWID_REMOTE_URL=" + url.replace("https://", "wss://") + "/infer")
 On Colab, replace the `kaggle_secrets` lines with your token directly, or use
 `google.colab.userdata`.
 
-**Cell 5, warm the model before the demo:**
+**Cell 5, warm the model before the demo.** This loads ~2.4 GB of weights, which takes
+minutes on a fresh notebook. Do it now so the first reciter's first waqf does not pay for
+it.
 
 ```python
-!curl -s -X POST localhost:8200/warmup
+!curl -s -X POST localhost:8200/warmup-async     # returns immediately
 ```
 
-This loads ~2.4 GB of weights. Do it now so the first reciter's first waqf does not pay a
-two-minute wait.
+Then watch the log rather than a blocking request:
+
+```python
+!tail -5 /kaggle/working/server.log
+```
+
+You are waiting for the second of these two lines:
+
+```
+Loading Muaalem (obadx/muaalem-model-v3_2) onto cuda…
+Muaalem ready on cuda:0
+```
+
+`GET /health` flips to `"loaded": true` at the same moment.
+
+The blocking form, `curl -s -X POST localhost:8200/warmup`, works too and returns
+`{"status":"warm"}` when finished. It just sits there silently for minutes first, which is
+hard to tell apart from a hang. Either way, run warmup from **inside** the notebook: a
+tunnel cuts off a request this slow and reports a gateway error while the load quietly
+continues.
 
 **Cell 6, keep the notebook alive.** Kaggle stops an idle notebook, which kills the
 tunnel:

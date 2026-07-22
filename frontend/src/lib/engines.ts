@@ -1,9 +1,12 @@
 import type { EngineChoice, HealthInfo } from "./types";
 
 /**
- * Static metadata for the two models a reciter can pick between. Kept separate from
- * the backend's engine names so the UI copy lives in one place — "real" over the wire
- * is المُعلِّم (Muaalem) here, never shown to the user as "real".
+ * Static metadata for the models a reciter can pick between. Kept separate from the
+ * backend's engine names so the UI copy lives in one place — "real" over the wire is
+ * المُعلِّم (Muaalem) here, never shown to the user as "real".
+ *
+ * Whichever of these the server did not build is greyed out by EnginePicker from
+ * /health's available_engines, so listing one costs nothing on a server without it.
  */
 export const ENGINES: { id: EngineChoice; label: string; hint: string }[] = [
   {
@@ -15,6 +18,14 @@ export const ENGINES: { id: EngineChoice; label: string; hint: string }[] = [
     id: "zipformer",
     label: "Zipformer",
     hint: "أخفّ وأسرع، بدون تقييم تجويد",
+  },
+  {
+    // Same model and same output as المُعلِّم, running on a GPU elsewhere. Labelled by
+    // WHERE it runs rather than what it does, because to the reciter the only
+    // difference is that each waqf waits on a network round trip.
+    id: "remote",
+    label: "المُعلِّم (سحابي)",
+    hint: "نفس تحليل المُعلِّم، على معالج رسوميات بعيد — أبطأ قليلًا",
   },
 ];
 
@@ -28,7 +39,7 @@ const STORAGE_KEY = "tajwid.engine";
 export function loadStoredEngineChoice(): EngineChoice | null {
   try {
     const v = localStorage.getItem(STORAGE_KEY);
-    return v === "real" || v === "zipformer" ? v : null;
+    return ENGINES.some((e) => e.id === v) ? (v as EngineChoice) : null;
   } catch {
     return null; // private browsing / storage disabled — just don't persist
   }
