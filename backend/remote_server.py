@@ -23,7 +23,9 @@ spend your GPU quota. Keep the URL private and stop the tunnel when you are done
 from __future__ import annotations
 
 import argparse
+import asyncio
 import logging
+import threading
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
@@ -33,6 +35,10 @@ logger = logging.getLogger("remote_server")
 app = FastAPI(title="Tajwid remote GPU inference", version="1.0.0")
 
 _bundle = None
+# Loading is minutes long and can be requested concurrently (a /warmup racing the first
+# chunk). The lock makes the second caller wait for the first's model rather than start a
+# second 2.4 GB load onto the same GPU.
+_load_lock = threading.Lock()
 
 
 def _models():
@@ -41,15 +47,24 @@ def _models():
     Lazily rather than at import so the server binds its port (and the tunnel comes up,
     and you can read the URL) while ~2.4 GB of weights are still downloading. The first
     chunk therefore pays the load; every one after is warm.
+
+    BLOCKING, for minutes, on that first call. Every caller must reach this off the event
+    loop (see `_models_async`), or the whole server — /health included — goes dark for the
+    duration, which reads from outside as a crashed notebook.
     """
     global _bundle
-    if _bundle is None:
-        from tajwid.asr.models import get_models
+    with _load_lock:
+        if _bundle is None:
+            from tajwid.asr.models import get_models
 
-        logger.info("Loading Muaalem…")
-        _bundle = get_models()
-        logger.info("Muaalem ready on %s", _bundle.muaalem.device)
+            logger.info("Loading Muaalem…")
+            _bundle = get_models()
+            logger.info("Muaalem ready on %s", _bundle.muaalem.device)
     return _bundle
+
+
+async def _models_async():
+    return await asyncio.to_thread(_models)
 
 
 @app.get("/health")
@@ -69,8 +84,13 @@ def health() -> dict:
 def warmup() -> dict:
     """Load the model now rather than on the first reciter's first waqf.
 
-    Worth calling from the notebook right after the tunnel is up: it moves a two-minute
-    wait out of the demo and into setup.
+    Call this from INSIDE the notebook (`curl localhost:8200/warmup`), not through the
+    tunnel. ngrok and Cloudflare both cut off a request that takes too long to answer, and
+    loading 2.4 GB reliably takes longer than that: over the tunnel this returns a gateway
+    error while the load continues, which looks like a failure and is not one.
+
+    A plain `def` (not `async def`) so FastAPI runs it in a worker thread and /health keeps
+    answering while the weights load.
     """
     import torch
 
@@ -79,6 +99,17 @@ def warmup() -> dict:
     bundle = _models()
     transcribe_reference_free(bundle.muaalem, [torch.zeros(16000)], 16000)
     return {"status": "warm"}
+
+
+@app.post("/warmup-async")
+async def warmup_async() -> dict:
+    """Start loading and return immediately, so a tunnel timeout cannot misreport it.
+
+    Poll `GET /health` for `"loaded": true`. This is the safe way to warm the model from
+    outside the notebook.
+    """
+    asyncio.get_running_loop().run_in_executor(None, _models)
+    return {"status": "loading", "poll": "GET /health until loaded is true"}
 
 
 @app.websocket("/infer")
@@ -110,8 +141,16 @@ async def infer(websocket: WebSocket) -> None:
                 )
                 continue
 
-            bundle = _models()
-            transcript = transcribe_reference_free(bundle.muaalem, [wave], 16000)[0]
+            # Both of these block for a long time — the first for MINUTES while weights
+            # load. Running them on the event loop would stall this coroutine, every other
+            # connection, and /health, for the duration. From outside that is
+            # indistinguishable from a dead notebook.
+            bundle = await _models_async()
+            transcript = (
+                await asyncio.to_thread(
+                    transcribe_reference_free, bundle.muaalem, [wave], 16000
+                )
+            )[0]
             logger.info(
                 "%.2fs audio -> %d phonemes", wave.numel() / 16000, len(transcript.phonemes_text)
             )
