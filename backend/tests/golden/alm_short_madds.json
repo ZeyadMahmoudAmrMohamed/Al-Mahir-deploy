@@ -1,0 +1,112 @@
+{
+  "uthmani": "الٓمٓ",
+  "predicted_phonemes": "ءَلِفلَااممِۦۦم",
+  "reference_phonemes": "ءَلِفلَااااااممممِۦۦۦۦۦۦم",
+  "errors": [
+    {
+      "uthmani_pos": [
+        1,
+        2
+      ],
+      "ph_pos": [
+        7,
+        13
+      ],
+      "error_type": "tajweed",
+      "speech_error_type": "replace",
+      "expected_ph": "اااااا",
+      "preditected_ph": "اا",
+      "expected_len": 6,
+      "predicted_len": 2,
+      "ref_tajweed_rules": [
+        {
+          "name": {
+            "ar": "المد اللازم",
+            "en": "Lazem Madd"
+          },
+          "golden_len": 6,
+          "correctness_type": "count",
+          "tag": "alif",
+          "available_tags": [
+            "alif",
+            "waw",
+            "yaa"
+          ]
+        }
+      ],
+      "inserted_tajweed_rules": null,
+      "replaced_tajweed_rules": null,
+      "missing_tajweed_rules": null
+    },
+    {
+      "uthmani_pos": [
+        3,
+        4
+      ],
+      "ph_pos": [
+        13,
+        18
+      ],
+      "error_type": "tajweed",
+      "speech_error_type": "replace",
+      "expected_ph": "ممممِ",
+      "preditected_ph": "ممِ",
+      "expected_len": 6,
+      "predicted_len": 2,
+      "ref_tajweed_rules": [
+        {
+          "name": {
+            "ar": "المد اللازم",
+            "en": "Lazem Madd"
+          },
+          "golden_len": 6,
+          "correctness_type": "count",
+          "tag": "yaa",
+          "available_tags": [
+            "alif",
+            "waw",
+            "yaa"
+          ]
+        }
+      ],
+      "inserted_tajweed_rules": null,
+      "replaced_tajweed_rules": null,
+      "missing_tajweed_rules": null
+    },
+    {
+      "uthmani_pos": [
+        3,
+        4
+      ],
+      "ph_pos": [
+        18,
+        24
+      ],
+      "error_type": "tajweed",
+      "speech_error_type": "replace",
+      "expected_ph": "ۦۦۦۦۦۦ",
+      "preditected_ph": "ۦۦ",
+      "expected_len": 6,
+      "predicted_len": 2,
+      "ref_tajweed_rules": [
+        {
+          "name": {
+            "ar": "المد اللازم",
+            "en": "Lazem Madd"
+          },
+          "golden_len": 6,
+          "correctness_type": "count",
+          "tag": "yaa",
+          "available_tags": [
+            "alif",
+            "waw",
+            "yaa"
+          ]
+        }
+      ],
+      "inserted_tajweed_rules": null,
+      "replaced_tajweed_rules": null,
+      "missing_tajweed_rules": null
+    }
+  ]
+}

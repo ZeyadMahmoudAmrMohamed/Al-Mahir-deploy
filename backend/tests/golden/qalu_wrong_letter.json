@@ -1,0 +1,82 @@
+{
+  "uthmani": "قَالُوٓا۟",
+  "predicted_phonemes": "كالۥۥ",
+  "reference_phonemes": "قَاالُۥۥ",
+  "errors": [
+    {
+      "uthmani_pos": [
+        0,
+        2
+      ],
+      "ph_pos": [
+        0,
+        2
+      ],
+      "error_type": "normal",
+      "speech_error_type": "replace",
+      "expected_ph": "قَ",
+      "preditected_ph": "ك",
+      "expected_len": null,
+      "predicted_len": null,
+      "ref_tajweed_rules": null,
+      "inserted_tajweed_rules": null,
+      "replaced_tajweed_rules": null,
+      "missing_tajweed_rules": null
+    },
+    {
+      "uthmani_pos": [
+        2,
+        3
+      ],
+      "ph_pos": [
+        2,
+        4
+      ],
+      "error_type": "tajweed",
+      "speech_error_type": "replace",
+      "expected_ph": "اا",
+      "preditected_ph": "ا",
+      "expected_len": 2,
+      "predicted_len": 1,
+      "ref_tajweed_rules": [
+        {
+          "name": {
+            "ar": "المد الطبيعي",
+            "en": "Normal Madd"
+          },
+          "golden_len": 2,
+          "correctness_type": "count",
+          "tag": "alif",
+          "available_tags": [
+            "alif",
+            "waw",
+            "yaa"
+          ]
+        }
+      ],
+      "inserted_tajweed_rules": null,
+      "replaced_tajweed_rules": null,
+      "missing_tajweed_rules": null
+    },
+    {
+      "uthmani_pos": [
+        3,
+        5
+      ],
+      "ph_pos": [
+        4,
+        6
+      ],
+      "error_type": "tashkeel",
+      "speech_error_type": "delete",
+      "expected_ph": "لُ",
+      "preditected_ph": "ل",
+      "expected_len": null,
+      "predicted_len": null,
+      "ref_tajweed_rules": null,
+      "inserted_tajweed_rules": null,
+      "replaced_tajweed_rules": null,
+      "missing_tajweed_rules": null
+    }
+  ]
+}

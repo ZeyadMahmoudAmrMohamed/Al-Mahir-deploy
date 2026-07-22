@@ -1,0 +1,55 @@
+import { ENGINES } from "../lib/engines";
+import type { EngineChoice } from "../lib/types";
+
+/**
+ * A compact popover, not a full sheet: two options is a menu, not a page. Anchored
+ * under the topbar button that opens it (App.tsx positions it via CSS).
+ */
+export function EnginePicker({
+  choice,
+  onChoose,
+  available,
+  onClose,
+}: {
+  choice: EngineChoice;
+  onChoose: (choice: EngineChoice) => void;
+  /** available_engines from /health, or null while that request is still in flight —
+   *  null means "unknown yet", so nothing is disabled on a guess. */
+  available: Set<string> | null;
+  onClose: () => void;
+}) {
+  return (
+    <>
+      {/* Click-outside-to-close. Transparent — this is a menu, not a modal. */}
+      <div className="enginemenu-backdrop" onClick={onClose} />
+      <div className="enginemenu" role="menu" aria-label="اختر محرك التعرف الصوتي">
+        <p className="enginemenu__title">محرك التعرّف الصوتي</p>
+        {ENGINES.map((e) => {
+          const known = available !== null;
+          const off = known && !available!.has(e.id);
+          return (
+            <button
+              key={e.id}
+              className="enginemenu__opt"
+              role="menuitemradio"
+              aria-checked={choice === e.id}
+              disabled={off}
+              onClick={() => {
+                onChoose(e.id);
+                onClose();
+              }}
+            >
+              <span className="enginemenu__label">
+                <span className="enginemenu__dot" data-on={choice === e.id} />
+                {e.label}
+              </span>
+              <span className="enginemenu__hint">
+                {off ? "غير متاح على هذا الخادم الآن" : e.hint}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </>
+  );
+}

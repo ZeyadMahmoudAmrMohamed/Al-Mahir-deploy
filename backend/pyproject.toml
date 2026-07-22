@@ -1,0 +1,57 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tajwid"
+version = "1.0.0"
+description = "Al-Mahir Tajwid AI service: streaming audio -> waqf chunking -> Muaalem phonemes+sifat -> Quran tracking -> per-word recitation feedback."
+readme = "README.md"
+requires-python = ">=3.10"
+# quran_transcript, quran_muaalem and recitations_segmenter are VENDORED into src/
+# (see VENDOR notes in the repo root), so their transitive deps are declared here.
+dependencies = [
+    # Inference stack (real engine; torch also powers the silero VAD used everywhere)
+    "torch>=2.7.0",
+    "transformers>=4.55.0",
+    "torchaudio>=2.7.0",
+    "librosa>=0.11.0",
+    "soundfile>=0.12.1",
+    "numpy>=2.2.6",
+    "diff-match-patch>=20241021",   # quran_muaalem
+    "rich>=14.1.0",                 # quran_muaalem.explain
+    "tqdm",                         # recitations_segmenter
+    # Feedback half
+    "levenshtein>=0.27.1",
+    "fuzzysearch>=0.8.1",
+    "xmltodict",                    # quran_transcript
+    "sherpa-onnx>=1.10.0",           # ZipformerAsrEngine (CPU ONNX runtime, no torch needed for it)
+    # Āyah search: BGE-M3 embeddings over a FAISS cosine index (data/search/*)
+    "sentence-transformers>=3.0",
+    "faiss-cpu>=1.8.0",
+    "openai>=1.40",                  # HyDE query expansion; any OpenAI-compatible provider
+    # Service
+    "fastapi>=0.116.1",
+    "uvicorn[standard]>=0.35.0",
+    "websockets>=13.0",
+    "python-multipart>=0.0.20",
+    "pydantic>=2.7",
+    "pydantic-settings>=2.5",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8", "httpx>=0.27"]
+
+[project.scripts]
+tajwid-serve = "tajwid.main:main"
+tajwid-transcribe = "tajwid.asr.batch:_main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+# quran_transcript loads these via importlib.resources; the silero VAD jit ships
+# inside recitations_segmenter. Without them the packages import and then fail at
+# the first real call.
+quran_transcript = ["quran-script/*", "LICENSE"]
+recitations_segmenter = ["data/*"]
