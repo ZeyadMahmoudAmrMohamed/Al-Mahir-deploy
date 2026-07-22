@@ -34,33 +34,47 @@ logger = logging.getLogger("remote_server")
 
 app = FastAPI(title="Tajwid remote GPU inference", version="1.0.0")
 
-_bundle = None
+_muaalem = None
 # Loading is minutes long and can be requested concurrently (a /warmup racing the first
 # chunk). The lock makes the second caller wait for the first's model rather than start a
-# second 2.4 GB load onto the same GPU.
+# second multi-GB load onto the same GPU.
 _load_lock = threading.Lock()
 
 
 def _models():
-    """Load the Muaalem bundle once, on first use.
+    """Load Muaalem once, on first use. MUAALEM ONLY — not the full bundle.
+
+    `asr.models.get_models()` loads all three models the local pipeline needs: silero VAD,
+    the W2V-BERT segmenter (2.32 GB) and Muaalem (2.42 GB). This server uses NONE of the
+    first two. VAD endpointing and waqf chunking happen on the local side, which is what
+    decides where one chunk ends; by the time audio reaches here it is already one
+    finalized utterance. Calling get_models() here downloads ~4.8 GB to use 2.4 GB of it,
+    which on a fresh notebook is several extra minutes of what looks like a hang.
 
     Lazily rather than at import so the server binds its port (and the tunnel comes up,
-    and you can read the URL) while ~2.4 GB of weights are still downloading. The first
-    chunk therefore pays the load; every one after is warm.
+    and you can read the URL) while the weights are still downloading.
 
     BLOCKING, for minutes, on that first call. Every caller must reach this off the event
     loop (see `_models_async`), or the whole server — /health included — goes dark for the
     duration, which reads from outside as a crashed notebook.
     """
-    global _bundle
+    global _muaalem
     with _load_lock:
-        if _bundle is None:
-            from tajwid.asr.models import get_models
+        if _muaalem is None:
+            from quran_muaalem.inference import Muaalem
 
-            logger.info("Loading Muaalem…")
-            _bundle = get_models()
-            logger.info("Muaalem ready on %s", _bundle.muaalem.device)
-    return _bundle
+            from tajwid.config import get_settings
+
+            s = get_settings()
+            device = s.resolved_muaalem_device
+            logger.info("Loading Muaalem (%s) onto %s…", s.muaalem_model_id, device)
+            _muaalem = Muaalem(
+                model_name_or_path=s.muaalem_model_id,
+                device=device,
+                dtype=s.dtype_for(device),
+            )
+            logger.info("Muaalem ready on %s", _muaalem.device)
+    return _muaalem
 
 
 async def _models_async():
@@ -76,7 +90,7 @@ def health() -> dict:
         "role": "remote-inference",
         "cuda": torch.cuda.is_available(),
         "device": torch.cuda.get_device_name(0) if torch.cuda.is_available() else "cpu",
-        "loaded": _bundle is not None,
+        "loaded": _muaalem is not None,
     }
 
 
@@ -96,8 +110,8 @@ def warmup() -> dict:
 
     from tajwid.asr.transcribe import transcribe_reference_free
 
-    bundle = _models()
-    transcribe_reference_free(bundle.muaalem, [torch.zeros(16000)], 16000)
+    muaalem = _models()
+    transcribe_reference_free(muaalem, [torch.zeros(16000)], 16000)
     return {"status": "warm"}
 
 
@@ -145,10 +159,10 @@ async def infer(websocket: WebSocket) -> None:
             # load. Running them on the event loop would stall this coroutine, every other
             # connection, and /health, for the duration. From outside that is
             # indistinguishable from a dead notebook.
-            bundle = await _models_async()
+            muaalem = await _models_async()
             transcript = (
                 await asyncio.to_thread(
-                    transcribe_reference_free, bundle.muaalem, [wave], 16000
+                    transcribe_reference_free, muaalem, [wave], 16000
                 )
             )[0]
             logger.info(
