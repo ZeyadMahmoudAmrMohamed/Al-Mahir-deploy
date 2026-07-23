@@ -123,9 +123,22 @@ export type FeedbackEvent = {
   cursor: Span | null;
 };
 
+/**
+ * Tier 1 live word-fill. Provisional and forward-only: coordinates only, never a
+ * verdict. `confirmed` = words heard so far; `skipped` = words the reciter passed over
+ * (asserted only once a later word is confirmed). Reconciled by the next `feedback`.
+ */
+export type ProgressEvent = {
+  type: "progress";
+  confirmed: Span[];
+  skipped: Span[];
+  cursor: Span | null;
+};
+
 export type SessionEvent =
   | { type: "session"; session_id: string; engine: string; sample_rate: number }
   | FeedbackEvent
+  | ProgressEvent
   | { type: "done" };
 
 // --- ASR engine choice ----------------------------------------------------
@@ -148,8 +161,18 @@ export type HealthInfo = {
 
 // --- What the UI derives ------------------------------------------------------
 
-/** How a word is painted. `pending` = not yet reached; `recited` = read, no fault. */
-export type WordMark = "pending" | "recited" | "almost" | "error" | "unverified";
+/**
+ * How a word is painted. `pending` = not yet reached; `recited` = read, no fault.
+ * `heard`/`skipped` are PROVISIONAL (Tier 1), always overridden by a real verdict.
+ */
+export type WordMark =
+  | "pending"
+  | "recited"
+  | "almost"
+  | "error"
+  | "unverified"
+  | "heard"
+  | "skipped";
 
 // --- Moshaf (recitation) attributes: the settings the reciter can tune ---------
 

@@ -120,3 +120,90 @@ def test_perfect_recitation_is_never_accused(mock_engine):
     feedback, _ = analyse_session(transcript_to_output(t), session.state)
     assert feedback.status == "ok"
     assert not [w for w in feedback.words if w.status == "error"]
+
+
+# --- Tier 1 live word-fill ---------------------------------------------------
+
+_AL_FATIHA_1_5 = "ءِييَااكَنَعبُدُوَءِييَااكَنَستَعِۦۦۦۦن"
+
+
+class _FakeLiveEngine:
+    """A real-named engine that ignores the audio and returns a fixed transcript, so the
+    live-decode wiring can be exercised on CPU with no model."""
+
+    name = "real"
+
+    def __init__(self, phonemes: str):
+        self._ph = phonemes
+
+    def transcribe_chunk(self, wave, sample_rate, ctx=None):
+        from quran_transcript import chunck_phonemes
+        from tajwid.asr.transcribe import ChunkTranscript
+
+        groups = chunck_phonemes(self._ph)
+        return ChunkTranscript(
+            phonemes_text=self._ph,
+            char_probs=[1.0] * len(self._ph),
+            groups=groups,
+            group_probs=[1.0] * len(groups),
+            sifat=[],
+        )
+
+
+def test_live_progress_fills_words_before_a_pause():
+    # Pin live_feedback explicitly so an ambient .env/TAJWID_LIVE_FEEDBACK can't disable
+    # the very path under test (init kwargs outrank env sources in pydantic-settings).
+    s = Settings(asr_engine="real", live_feedback=True)
+    sess = LiveSession(
+        _FakeLiveEngine(_AL_FATIHA_1_5),
+        session_id="t",
+        start=Span(sura=1, aya=5, word_idx=0),
+        settings=s,
+    )
+    # Silence: silero finds no speech, so nothing finalizes and the live path fires on
+    # the interval counter. Length must clear both the interval and min_speech gates.
+    frame = np.zeros(s.live_interval_samples + s.min_speech_samples, dtype=np.float32)
+    events = sess.feed(frame)
+
+    progress = [e for e in events if e["type"] == "progress"]
+    assert progress, "a progress event should fire once past the live interval"
+    confirmed = progress[-1]["confirmed"]
+    assert confirmed, "confirmed words expected"
+    assert {"sura": 1, "aya": 5, "word_idx": 0} in confirmed
+    # Provisional events assert nothing negative about pronunciation.
+    assert "words" not in progress[-1]
+
+
+def test_mock_engine_emits_no_live_progress(mock_engine):
+    # Force live_feedback on so this proves the ENGINE gate (mock is off), not that an
+    # ambient TAJWID_LIVE_FEEDBACK=false happened to disable everything.
+    s = Settings(asr_engine="mock", live_feedback=True)
+    sess = LiveSession(mock_engine, session_id="t", start=Span(sura=1, aya=1, word_idx=0), settings=s)
+    frame = np.zeros(s.live_interval_samples + s.min_speech_samples, dtype=np.float32)
+    events = sess.feed(frame)
+    assert not [e for e in events if e.get("type") == "progress"], "mock must not drive live-fill"
+
+
+def test_process_survives_a_feedback_analysis_crash(mock_engine, monkeypatch):
+    """A vendored-phonetizer KeyError on one span must skip the chunk, not kill the
+    session (see the KeyError:'ء' from quran_transcript on some Al-An'am spans)."""
+    import torch
+
+    import tajwid.session as sess_mod
+    from tajwid.asr.stream import FinalizedChunk
+
+    sess = LiveSession(mock_engine, session_id="t", start=Span(sura=1, aya=1, word_idx=0))
+
+    def boom(*_a, **_k):
+        raise KeyError("ء")
+
+    monkeypatch.setattr(sess_mod, "analyse_session", boom)
+    fin = FinalizedChunk(
+        wave=torch.zeros(16000, dtype=torch.float32),
+        start_sample=0,
+        end_sample=16000,
+        forced=False,
+    )
+    # No exception escapes, the chunk is dropped, and the cursor is left untouched.
+    assert sess._process(fin) is None
+    assert sess.cursor == Span(sura=1, aya=1, word_idx=0)

@@ -195,3 +195,60 @@ def track(
         end=Span(sura=e_sura, aya=e_aya, word_idx=e_widx),
         uthmani_text=_uthmani_for_ordinals(start_ord, n_words),
     )
+
+
+def confirmed_and_skipped(
+    phonemes: str,
+    cursor: Span,
+    moshaf: MoshafAttributes,
+    lookahead_words: int = 1,
+    penalty: int = 0,
+) -> tuple[list[Span], list[Span]]:
+    """Live word-fill: which words the reciter has provisionally reached, and which
+    they appear to have skipped — from the SAME windowed ``track`` the authoritative
+    grade uses, so the live cursor cannot drift from the graded one.
+
+    ``lookahead_words`` is held back from the END of the match: the final word(s) of a
+    decode-so-far are still in flight (the reciter may be mid-madd), so they are not
+    committed until later audio stabilises them. A skip is asserted ONLY when a later
+    word was confirmed (``confirmed`` is non-empty) — that keeps skip-detection a fact
+    about audio already gone by, never a guess about audio still arriving.
+
+    Returns ``(confirmed, skipped)`` in mushaf order. Empty on a failed/blank match; the
+    caller emits nothing rather than guess.
+    """
+    found = track(phonemes, cursor, moshaf, penalty=penalty)
+    if found.status != "ok" or found.span is None or found.end is None:
+        return [], []
+
+    ord_of = _ordinal_of_word()
+    words_by_ord = _word_of_ordinal()
+    cur_ord = ord_of.get((cursor.sura, cursor.aya, cursor.word_idx))
+    span_ord = ord_of.get((found.span.sura, found.span.aya, found.span.word_idx))
+    end_ord = ord_of.get((found.end.sura, found.end.aya, found.end.word_idx))
+    if cur_ord is None or span_ord is None or end_ord is None:
+        return [], []
+
+    last_confirm_ord = end_ord - max(0, lookahead_words)
+    confirmed = (
+        [
+            Span(sura=s, aya=a, word_idx=w)
+            for (s, a, w) in (words_by_ord[o] for o in range(span_ord, last_confirm_ord + 1))
+        ]
+        if last_confirm_ord >= span_ord
+        else []
+    )
+
+    # Only flag a skip once a later word is confirmed. The window reaches backwards too
+    # (reciters repeat), so a match BEHIND the cursor gives span_ord < cur_ord and an
+    # empty range here — no false skip on a legitimate rewind.
+    skipped = (
+        [
+            Span(sura=s, aya=a, word_idx=w)
+            for (s, a, w) in (words_by_ord[o] for o in range(cur_ord, span_ord))
+        ]
+        if confirmed
+        else []
+    )
+
+    return confirmed, skipped

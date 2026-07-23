@@ -204,7 +204,19 @@ function Word({
 }
 
 const severity = (m?: string) =>
-  m === "error" ? 3 : m === "almost" ? 2 : m === "unverified" ? 1 : m === "recited" ? 0.5 : 0;
+  m === "error"
+    ? 3
+    : m === "almost"
+      ? 2
+      : m === "unverified"
+        ? 1
+        : m === "recited"
+          ? 0.5
+          : m === "skipped"
+            ? 0.45
+            : m === "heard"
+              ? 0.4
+              : 0;
 
 function tooltip(
   word: MushafWord,

@@ -427,6 +427,30 @@ the system not listening. Acknowledge it in the UI; do not score it.
 | `errors` | array | Findings for this word. Empty when correct |
 | `trimmed` | bool | `true` means the word was **not scored** |
 
+### 5.4a The progress event (live word-fill)
+
+On the `real` and `remote` engines the server also pushes a lightweight `progress` event
+while the reciter is still speaking, roughly every 300 ms, to fill words in before the
+pause. It is **provisional and forward-only**:
+
+```json
+{"type": "progress",
+ "confirmed": [{"sura": 1, "aya": 5, "word_idx": 0}],
+ "skipped": [],
+ "cursor": {"sura": 1, "aya": 5, "word_idx": 2}}
+```
+
+- `confirmed` — words the reciter has provisionally reached. Render them as *reached*, not
+  as *correct* (no tick, no green): the authoritative `feedback` event grades them at the
+  pause and may override.
+- `skipped` — words the reciter passed over, asserted only once a later word is confirmed.
+  A gentle positional hint, never a pronunciation mistake.
+- `cursor` — the furthest confirmed word, for advancing the highlight and following the page.
+
+A `progress` event carries **no errors, no phonemes, no ṣifāt**. Never render a mistake from
+it; all criticism comes from `feedback`. `mock` and `zipformer` sessions never send it. A
+client that ignores `progress` degrades to today's pause-only behavior.
+
 ### 5.5 Word status, and the three rules you must follow
 
 These are contract requirements, not styling suggestions. The engine deliberately declines

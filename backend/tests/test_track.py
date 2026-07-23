@@ -118,3 +118,44 @@ def test_session_id_is_carried(moshaf):
     state = SessionState(moshaf=moshaf, session_id="learner-42", cursor=None)
     result = track(AL_FATIHA_1_5, Span(sura=1, aya=4, word_idx=0), moshaf)
     assert advance(state, result).session_id == "learner-42"
+
+
+# --- Live word-fill alignment (confirmed_and_skipped) ------------------------
+
+
+def test_confirmed_and_skipped_fills_forward_with_no_false_skip(moshaf):
+    from tajwid.feedback.track import confirmed_and_skipped
+
+    confirmed, skipped = confirmed_and_skipped(
+        AL_FATIHA_1_5, Span(sura=1, aya=5, word_idx=0), moshaf, lookahead_words=1
+    )
+    assert confirmed, "a correct recitation from the cursor should confirm words"
+    assert skipped == [], "reciting from the cursor forward is never a skip"
+    assert Span(sura=1, aya=5, word_idx=0) in confirmed, "the cursor word is confirmed"
+    assert all((c.sura, c.aya) == (1, 5) for c in confirmed)
+
+
+def test_confirmed_and_skipped_holds_back_the_last_word(moshaf):
+    from tajwid.feedback.track import confirmed_and_skipped
+
+    conf1, _ = confirmed_and_skipped(
+        AL_FATIHA_1_5, Span(sura=1, aya=5, word_idx=0), moshaf, lookahead_words=1
+    )
+    conf0, _ = confirmed_and_skipped(
+        AL_FATIHA_1_5, Span(sura=1, aya=5, word_idx=0), moshaf, lookahead_words=0
+    )
+    assert len(conf1) < len(conf0), "lookahead must hold back the trailing word(s)"
+
+
+def test_confirmed_and_skipped_flags_a_real_skip(moshaf):
+    from tajwid.feedback.track import confirmed_and_skipped
+
+    # The last two words of 1:5 only (وإياك نستعين): a slice of the verified string, so
+    # no transcription risk. Cursor still sits at the verse's first word.
+    tail = AL_FATIHA_1_5[len("ءِييَااكَنَعبُدُ"):]
+    confirmed, skipped = confirmed_and_skipped(
+        tail, Span(sura=1, aya=5, word_idx=0), moshaf, lookahead_words=1
+    )
+    assert confirmed, "a later word is confirmed, which is what licenses a skip claim"
+    assert skipped, "the leading words the reciter passed over are flagged"
+    assert Span(sura=1, aya=5, word_idx=0) in skipped, "the cursor word was skipped"

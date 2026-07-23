@@ -3,6 +3,7 @@ import type {
   EngineChoice,
   FeedbackEvent,
   MoshafConfig,
+  ProgressEvent,
   RuleSelection,
   SessionEvent,
   Span,
@@ -15,6 +16,7 @@ const WS_URL = () => {
 
 export type SessionHandlers = {
   onFeedback: (e: FeedbackEvent) => void;
+  onProgress?: (e: ProgressEvent) => void;
   onLevel: (level: number) => void;
   onState: (state: SessionStatus) => void;
   onError: (message: string) => void;
@@ -63,6 +65,7 @@ export class RecitationSession {
     ws.onmessage = (e) => {
       const msg: SessionEvent = JSON.parse(e.data);
       if (msg.type === "feedback") this.handlers.onFeedback(msg);
+      else if (msg.type === "progress") this.handlers.onProgress?.(msg);
       else if (msg.type === "session") this.handlers.onEngine?.(msg.engine);
     };
     ws.onclose = () => {

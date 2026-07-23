@@ -316,11 +316,27 @@ button {
   text-underline-offset: 0.24em;
 }
 
+/* Tier 1 provisional marks. `heard` is the correct-ink one hair brighter — imperceptible
+   unless looked for; it settles to full-ink `recited` the instant Tier 2 confirms.
+   `skipped` is a gentle positional hint, never a mistake color.
+   ponytail: the exact shades are calibration knobs — tune --ink-heard/--mark-skipped to
+   the muṣḥaf's ink; the inline fallbacks keep it working without them. */
+.word--heard {
+  color: var(--ink-heard, color-mix(in srgb, var(--ink) 82%, transparent));
+}
+
+.word--skipped {
+  text-decoration: underline dotted var(--mark-skipped, #c9a227) 1.5px;
+  text-underline-offset: 0.3em;
+}
+
 .marks-off .word--almost,
 .marks-off .word--error,
 .marks-off .word--unverified,
 .marks-off .word--tajweed,
-.marks-off .word--tashkeel {
+.marks-off .word--tashkeel,
+.marks-off .word--heard,
+.marks-off .word--skipped {
   color: var(--ink);
   text-decoration: none;
 }

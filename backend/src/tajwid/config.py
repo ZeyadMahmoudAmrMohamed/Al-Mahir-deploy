@@ -103,6 +103,17 @@ class Settings(BaseSettings):
     # See FINDINGS.md.
     chunk_overlap_ms: int = 0
 
+    # --- Live word-fill (Tier 1: provisional per-word feedback before the waqf) ---
+    # Re-decode the growing utterance this often (ms) to fill words in live. Gated to
+    # the real/remote engines in LiveSession — mock fabricates phonemes and zipformer
+    # has no acoustic confidence, so neither drives live-fill.
+    live_feedback: bool = True
+    live_interval_ms: int = 300
+    # Words held back from the END of each live match: the last word(s) of a
+    # decode-so-far are still in flight (the reciter may be mid-madd), committed only
+    # once later audio stabilises them.
+    live_lookahead_words: int = 1
+
     # --- W2V-BERT segmenter (chunker for the offline whole-file batch path) ---
     segmenter_batch_size: int = 8
     min_silence_duration_ms: int = 30
@@ -210,6 +221,10 @@ class Settings(BaseSettings):
     @property
     def chunk_overlap_samples(self) -> int:
         return int(self.chunk_overlap_ms * self.sample_rate / 1000)
+
+    @property
+    def live_interval_samples(self) -> int:
+        return int(self.live_interval_ms * self.sample_rate / 1000)
 
 
 @lru_cache

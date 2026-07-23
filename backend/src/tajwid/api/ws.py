@@ -33,6 +33,11 @@ Protocol (all text messages are JSON):
     {"type":"session", "session_id", "engine"}         on start.
     {"type":"feedback", ...}                           one per finalized waqf chunk
                                                        (see tajwid.session.LiveSession).
+    {"type":"progress", "confirmed":[...], "skipped":[...], "cursor":{...}|null}
+                                                       provisional live word-fill (Tier 1),
+                                                       real/remote engines only. Coordinates
+                                                       only — never a verdict. Reconciled by
+                                                       the next "feedback".
     {"type":"done"}                                    after the end-of-stream flush.
 """
 

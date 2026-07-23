@@ -292,6 +292,11 @@ server → client
   {"type":"done"}
 ```
 
+On the `real`/`remote` engines a provisional **live word-fill** runs alongside the waqf
+pipeline: a `progress` event (coordinates only, never a verdict) fills words in every
+~300 ms as they are recited, and the waqf `feedback` remains the authoritative grade that
+reconciles them — see [API.md](API.md) §5.4a.
+
 `feedback` is a `FeedbackResponse` (see `tajwid/feedback/types.py`): every word of the
 matched span, in order, each with its Tanzil coordinates, `uthmani`, a `status`
 (`correct` | `almost` | `error`) and its errors. Three things the frontend must respect,

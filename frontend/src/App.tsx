@@ -22,7 +22,7 @@ import {
 } from "./lib/moshaf";
 import { cueMistake } from "./lib/cue";
 import { labelFor, loadHealth, loadStoredEngineChoice, storeEngineChoice } from "./lib/engines";
-import { accuracy, applyFeedback, emptyMarks, mistakesOnPage } from "./lib/marks";
+import { accuracy, applyFeedback, applyProgress, emptyMarks, mistakesOnPage } from "./lib/marks";
 import { PAGES, loadPageReady, loadSuraIndex, pageOf, spanKey, wordKey } from "./lib/mushaf";
 import { RecitationSession, type SessionStatus } from "./lib/session";
 import type {
@@ -125,11 +125,19 @@ export default function App() {
     }
   }, []);
 
+  const onProgress = useCallback((event: import("./lib/types").ProgressEvent) => {
+    setMarks((prev) => applyProgress(prev, event));
+    // The live cursor is what makes the page follow the reciter and the current word
+    // highlight move before the pause. Reconciled by the authoritative cursor at the waqf.
+    if (event.cursor) setCursor(event.cursor);
+  }, []);
+
   const start = useCallback(async () => {
     if (!cursor) return;
     const s = new RecitationSession(
       {
         onFeedback,
+        onProgress,
         onLevel: setLevel,
         onState: setStatus,
         onError: setToast,
@@ -148,7 +156,7 @@ export default function App() {
     );
     session.current = s;
     await s.start(cursor, engineChoice);
-  }, [cursor, onFeedback, engineChoice, moshaf, rules]);
+  }, [cursor, onFeedback, onProgress, engineChoice, moshaf, rules]);
 
   const stop = useCallback(async () => {
     await session.current?.stop();

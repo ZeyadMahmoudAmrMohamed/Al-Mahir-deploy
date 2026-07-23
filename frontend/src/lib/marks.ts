@@ -14,7 +14,13 @@
  */
 
 import { wordKey } from "./mushaf";
-import type { FeedbackEvent, MistakeLog, WordFeedback, WordMark } from "./types";
+import type {
+  FeedbackEvent,
+  MistakeLog,
+  ProgressEvent,
+  WordFeedback,
+  WordMark,
+} from "./types";
 
 export type MarkState = {
   /** wordKey -> how it is painted. */
@@ -41,6 +47,36 @@ function markOf(w: WordFeedback): WordMark {
   return "recited";
 }
 
+/** Committed (authoritative) verdicts. Provisional marks never overwrite these. */
+const COMMITTED = new Set<WordMark>(["error", "almost", "recited", "unverified"]);
+
+/**
+ * Fold one Tier 1 `progress` event into the page state. Provisional: sets `heard` on
+ * confirmed words and `skipped` on skipped ones, never touching a committed verdict, and
+ * carries no errors and no log entries. Pure: returns a new state.
+ */
+export function applyProgress(prev: MarkState, event: ProgressEvent): MarkState {
+  if (event.confirmed.length === 0 && event.skipped.length === 0) return prev;
+
+  const marks = new Map(prev.marks);
+  const reached = new Set(prev.reached);
+
+  for (const w of event.confirmed) {
+    const key = wordKey(w.sura, w.aya, w.word_idx);
+    reached.add(key); // live reveal in hidden mode
+    const cur = marks.get(key);
+    if (cur && COMMITTED.has(cur)) continue; // never downgrade an authoritative verdict
+    marks.set(key, "heard");
+  }
+  for (const w of event.skipped) {
+    const key = wordKey(w.sura, w.aya, w.word_idx);
+    if (marks.get(key)) continue; // don't touch a verdict OR an already-heard word
+    marks.set(key, "skipped");
+  }
+
+  return { ...prev, marks, reached };
+}
+
 /** Fold one chunk's feedback into the page state. Pure: returns a new state. */
 export function applyFeedback(prev: MarkState, event: FeedbackEvent): MarkState {
   const fb = event.feedback;
@@ -62,8 +98,16 @@ export function applyFeedback(prev: MarkState, event: FeedbackEvent): MarkState 
     // means the neighbouring chunk reaches back over that same word and scores it for
     // real. Whichever order the two chunks arrive, the real verdict must win: never let
     // an `unverified` re-emission grey out a word an overlapping chunk already judged.
-    const prev = marks.get(key);
-    if (mark === "unverified" && prev && prev !== "unverified") continue;
+    const prevMark = marks.get(key);
+    // Block only a real verdict from being greyed by a later `unverified`. A provisional
+    // `heard`/`skipped` carries no verdict, so let `unverified` (and anything else) win.
+    if (
+      mark === "unverified" &&
+      prevMark &&
+      COMMITTED.has(prevMark) &&
+      prevMark !== "unverified"
+    )
+      continue;
 
     marks.set(key, mark);
     detail.set(key, w);
