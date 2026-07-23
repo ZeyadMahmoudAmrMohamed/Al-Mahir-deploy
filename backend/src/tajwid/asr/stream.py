@@ -58,6 +58,10 @@ class StreamSession:
         self._last_speech_end_abs = 0
         self._trailing_silence = 0
 
+        # Tail of the previously emitted chunk, re-sent as the head of the next one
+        # (see Settings.chunk_overlap_ms). Empty when overlap is disabled.
+        self._overlap_tail = torch.zeros(0, dtype=torch.float32)
+
         self.vad.reset_states()
 
     # -- public API -------------------------------------------------------
@@ -124,10 +128,16 @@ class StreamSession:
                 n_windows = self._buffer.numel() // self.window
                 continue
 
-            # Hard cap: force-cut an over-long utterance.
+            # Hard cap: force-cut an over-long utterance. The overlap tail is prepended
+            # AFTER this check, so the budget has to make room for it -- otherwise a
+            # capped 19 s chunk goes out at 19 s + overlap and breaks the very limit the
+            # cap exists to enforce (Muaalem was trained on <=20 s segments).
             if (
                 self._in_speech
-                and (w_end_abs - self._speech_start_abs) >= self.s.max_chunk_samples
+                and (w_end_abs - self._speech_start_abs)
+                >= self.s.max_chunk_samples
+                - self.s.chunk_overlap_samples
+                - self.s.chunk_lead_pad_samples
             ):
                 chunks.append(
                     self._extract(self._speech_start_abs, w_end_abs, forced=True)
@@ -144,13 +154,37 @@ class StreamSession:
         lead = self.s.chunk_lead_pad_samples
         # No trailing pad on a forced (mid-speech) cut: it would duplicate the next chunk's
         # onset. A waqf cut pads into the following silence to keep the trailing madd whole.
+        #
+        # `chunk_overlap_ms` duplicates audio DELIBERATELY, which does not contradict the
+        # rule above but supersedes its reasoning: the objection to a trailing pad was an
+        # unreconciled duplicate word, and overlap is paired with a dedup rule that keeps
+        # the scored verdict. The trailing pad stays off regardless -- it is an unmanaged
+        # duplicate of unknown length, where the overlap is a fixed, deliberate window.
         trail = 0 if forced else self.s.chunk_trail_pad_samples
         a = max(self._buffer_start_abs, start_abs - lead)
         b = min(self._buffer_start_abs + self._buffer.numel(), end_abs + trail)
         rel_a = a - self._buffer_start_abs
         rel_b = b - self._buffer_start_abs
+        wave = self._buffer[rel_a:rel_b].clone()
+
+        # Stash this chunk's tail BEFORE prepending the previous one's, so the overlap
+        # is a fixed window of new audio rather than a tail that grows each chunk.
+        overlap = self.s.chunk_overlap_samples
+        tail, self._overlap_tail = self._overlap_tail, (
+            wave[-overlap:].clone() if overlap else self._overlap_tail
+        )
+        if overlap and tail.numel():
+            # The re-sent audio is real audio the reciter uttered, so `start_sample`
+            # moves back with it: audio_span_sec must describe what was transcribed,
+            # not what was newly endpointed. The duplicated WORDS are reconciled
+            # downstream by key (frontend lib/marks.ts keeps the scored verdict over a
+            # later `unverified` re-emission), which is what makes the duplication safe
+            # -- see the note in this method about forced cuts.
+            wave = torch.cat([tail, wave])
+            a -= tail.numel()
+
         return FinalizedChunk(
-            wave=self._buffer[rel_a:rel_b].clone(),
+            wave=wave,
             start_sample=a,
             end_sample=b,
             forced=forced,

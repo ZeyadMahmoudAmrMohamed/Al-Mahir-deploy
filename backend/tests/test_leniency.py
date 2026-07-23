@@ -155,7 +155,12 @@ def test_an_empty_rules_list_is_a_choice_not_a_missing_value():
     engine = MockEngine(Settings(asr_engine="mock"))
     make = lambda rules: LiveSession(engine, session_id="t", rules=rules)  # noqa: E731
 
-    assert make(None).state.rules is None
+    # An ABSENT selection no longer means "grade everything": sifat are withheld by
+    # default (Settings.grade_sifat, see FINDINGS.md), so it resolves to every tajwid
+    # rule and no sifa. The distinction this test exists to protect is unchanged --
+    # absent still grades the tajwid rules, `[]` still grades none of them.
+    absent = make(None).state.rules
+    assert absent and "aared_madd" in absent and "ghonna" not in absent
     assert make(frozenset()).state.rules == frozenset()
     assert make(frozenset({"ghonna"})).state.rules == frozenset({"ghonna"})
 

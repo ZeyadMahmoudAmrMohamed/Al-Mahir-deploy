@@ -85,7 +85,32 @@ def aggregate(
     return feedback
 
 
-def trim_edges(words: list[WordFeedback], start: Span, end: Span) -> list[WordFeedback]:
+def _blank(word: WordFeedback) -> None:
+    word.errors = []
+    word.status = "correct"  # see WordFeedback.trimmed: read the flag first
+    word.trimmed = True
+
+
+def blank_word_at(words: list[WordFeedback], span: Span) -> list[WordFeedback]:
+    """Un-score the word at ``span`` if it is present, leaving the rest untouched.
+
+    Used for chunk overlap (Settings.chunk_overlap_ms): the tail of the previous chunk
+    is re-sent as this chunk's head so a boundary word can be scored, but the word that
+    was SPAN-FINAL last time was recited in pausal (waqf) form -- a dropped final haraka,
+    no cross-word ghunnah. It was already scored correctly in that chunk, against a
+    pausal reference. Here it is interior and the reference is CONNECTED, so re-diffing
+    it invents a tashkeel/madd error the reciter never made. Skip it; the earlier,
+    correct verdict stands (the frontend keeps a scored verdict over a trimmed one).
+    """
+    for w in words:
+        if w.sura == span.sura and w.aya == span.aya and w.word_idx == span.word_idx:
+            _blank(w)
+    return words
+
+
+def trim_edges(
+    words: list[WordFeedback], start: Span, end: Span, forced: bool
+) -> list[WordFeedback]:
     """Stop scoring words that OUR chunker cut in half (FR-010).
 
     When a chunk boundary falls mid-word, the ASR emits a mangled fragment, the diff
@@ -98,21 +123,23 @@ def trim_edges(words: list[WordFeedback], start: Span, end: Span) -> list[WordFe
     the reciter genuinely began (at word 0) or genuinely finished (at the last word) is
     real, and silently declining to score it would be its own kind of lie.
 
-    Trimmed words are still returned — the frontend draws them — but unscored.
+    The trailing edge is only an artefact on a FORCED cut (the max-length cap sliced a
+    word mid-articulation). At a WAQF the reciter completed the last word and paused --
+    it is whole, and the phonetizer renders a span-final word in pausal form (رَيْبَ ->
+    ...بڇ, the final haraka dropped), which is exactly what a paused reciter says. So a
+    waqf's last word is scored, not trimmed: trimming it was greying a word we could
+    have verified, and its interior re-emission under overlap is handled by blank_word_at.
+
+    Trimmed words are still returned -- the frontend draws them -- but unscored.
     """
     if not words:
         return words
-
-    def _blank(word: WordFeedback) -> None:
-        word.errors = []
-        word.status = "correct"  # see WordFeedback.trimmed: read the flag first
-        word.trimmed = True
 
     if start.word_idx > 0:
         _blank(words[0])
 
     last_word_of_aya = len(Aya(end.sura, end.aya).get().uthmani_words) - 1
-    if end.word_idx < last_word_of_aya:
+    if forced and end.word_idx < last_word_of_aya:
         _blank(words[-1])
 
     return words

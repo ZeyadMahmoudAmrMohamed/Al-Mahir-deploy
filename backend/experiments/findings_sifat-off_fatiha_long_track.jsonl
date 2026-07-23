@@ -1,0 +1,9 @@
+{"chunk": 0, "word": "1:2:3", "word_status": "error", "trimmed": false, "error_type": "tashkeel", "speech_error_type": "delete", "confidence": 1.0, "expected_ph": "نَ", "predicted_ph": "ن", "rules": []}
+{"chunk": 0, "word": "1:3:0", "word_status": "almost", "trimmed": false, "error_type": "normal", "speech_error_type": "insert", "confidence": null, "expected_ph": "", "predicted_ph": "ءَ", "rules": []}
+{"chunk": 0, "word": "1:3:1", "word_status": "error", "trimmed": false, "error_type": "tashkeel", "speech_error_type": "insert", "confidence": 0.94921875, "expected_ph": "مِ", "predicted_ph": "ممَ", "rules": []}
+{"chunk": 0, "word": "1:4:0", "word_status": "almost", "trimmed": false, "error_type": "normal", "speech_error_type": "delete", "confidence": null, "expected_ph": "مَ", "predicted_ph": "", "rules": []}
+{"chunk": 0, "word": "1:4:2", "word_status": "error", "trimmed": false, "error_type": "tashkeel", "speech_error_type": "delete", "confidence": 0.99609375, "expected_ph": "نِ", "predicted_ph": "ن", "rules": []}
+{"chunk": 0, "word": "1:5:3", "word_status": "error", "trimmed": false, "error_type": "tashkeel", "speech_error_type": "delete", "confidence": 0.921875, "expected_ph": "نُ", "predicted_ph": "ن", "rules": []}
+{"chunk": 0, "word": "1:6:0", "word_status": "almost", "trimmed": false, "error_type": "normal", "speech_error_type": "insert", "confidence": null, "expected_ph": "", "predicted_ph": "ءِ", "rules": []}
+{"chunk": 0, "word": "1:6:2", "word_status": "error", "trimmed": false, "error_type": "tashkeel", "speech_error_type": "delete", "confidence": 1.0, "expected_ph": "مَ", "predicted_ph": "م", "rules": []}
+{"chunk": 1, "word": "1:7:8", "word_status": "error", "trimmed": false, "error_type": "tajweed", "speech_error_type": "replace", "confidence": 0.994140625, "expected_ph": "ۦۦۦۦ", "predicted_ph": "ۦۦ", "rules": ["Aared Madd"]}

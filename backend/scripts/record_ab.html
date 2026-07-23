@@ -1,0 +1,91 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Al-Mahir A/B mic recorder</title>
+<style>
+  body { font: 16px/1.6 system-ui; max-width: 44rem; margin: 3rem auto; padding: 0 1rem; }
+  button { font: inherit; padding: .6rem 1.4rem; }
+  #log { white-space: pre-wrap; background: #f4f4f4; padding: 1rem; margin-top: 1rem; }
+  .bad { color: #b00; font-weight: 600; }
+  .good { color: #070; font-weight: 600; }
+</style>
+<h1>A/B mic recorder</h1>
+<p>Records <b>one</b> recitation through <b>two</b> simultaneous mic streams:</p>
+<ul>
+  <li><code>A_processed.wav</code> — echoCancellation / noiseSuppression / autoGainControl <b>true</b> (what mic.ts does today)</li>
+  <li><code>B_raw.wav</code> — all three <b>false</b></li>
+</ul>
+<p>Recite 60–90 s of the same passage. Both files download when you stop.</p>
+<button id="go">Start</button>
+<div id="log"></div>
+
+<script>
+const SR = 16000;
+const log = (m, cls = "") => document.getElementById("log").insertAdjacentHTML(
+  "beforeend", `<div class="${cls}">${m}</div>`);
+
+// One AudioContext at 16 kHz: Chrome resamples the mic into it, so no resampling code here.
+const ctx = new AudioContext({ sampleRate: SR });
+
+async function tap(constraints, bucket) {
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: { ...constraints, channelCount: 1 } });
+  const node = ctx.createScriptProcessor(4096, 1, 1);   // deprecated but zero-setup; fine for a one-off tool
+  ctx.createMediaStreamSource(stream).connect(node);
+  node.connect(ctx.destination);                        // Chrome won't pull without a sink
+  node.onaudioprocess = e => bucket.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+  return { stream, node, settings: stream.getAudioTracks()[0].getSettings() };
+}
+
+function wav(chunks) {
+  const n = chunks.reduce((a, c) => a + c.length, 0);
+  const buf = new ArrayBuffer(44 + n * 2), v = new DataView(buf);
+  const str = (o, s) => [...s].forEach((c, i) => v.setUint8(o + i, c.charCodeAt(0)));
+  str(0, "RIFF"); v.setUint32(4, 36 + n * 2, true); str(8, "WAVEfmt ");
+  v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, SR, true); v.setUint32(28, SR * 2, true);
+  v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+  str(36, "data"); v.setUint32(40, n * 2, true);
+  let o = 44;
+  for (const c of chunks) for (const s of c) {
+    v.setInt16(o, Math.max(-1, Math.min(1, s)) * 32767, true); o += 2;
+  }
+  return new Blob([buf], { type: "audio/wav" });
+}
+
+const save = (blob, name) => {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob); a.download = name; a.click();
+};
+
+let running = null;
+document.getElementById("go").onclick = async () => {
+  const btn = document.getElementById("go");
+  if (running) {
+    const { A, B, a, b } = running; running = null;
+    a.node.disconnect(); b.node.disconnect();
+    a.stream.getTracks().forEach(t => t.stop()); b.stream.getTracks().forEach(t => t.stop());
+    save(wav(A), "A_processed.wav"); save(wav(B), "B_raw.wav");
+
+    // Did Chrome actually honour the differing constraints, or hand back one shared track?
+    const flat = cs => { const o = new Float32Array(cs.reduce((n, c) => n + c.length, 0)); let i = 0;
+      for (const c of cs) { o.set(c, i); i += c.length; } return o; };
+    const fa = flat(A), fb = flat(B), n = Math.min(fa.length, fb.length);
+    let diff = 0; for (let i = 0; i < n; i++) diff += Math.abs(fa[i] - fb[i]);
+    diff /= n || 1;
+    log(`saved ${(n / SR).toFixed(1)} s each; mean |A-B| = ${diff.toExponential(2)}`);
+    log(diff < 1e-6
+      ? "IDENTICAL — Chrome gave both streams the same processing. Record two separate takes instead."
+      : "The two streams genuinely differ. Good pair.", diff < 1e-6 ? "bad" : "good");
+    btn.textContent = "Start";
+    return;
+  }
+  const A = [], B = [];
+  const a = await tap({ echoCancellation: true,  noiseSuppression: true,  autoGainControl: true  }, A);
+  const b = await tap({ echoCancellation: false, noiseSuppression: false, autoGainControl: false }, B);
+  await ctx.resume();
+  running = { A, B, a, b };
+  log(`A applied: ${JSON.stringify(a.settings)}`);
+  log(`B applied: ${JSON.stringify(b.settings)}`);
+  log("recording — recite, then press Stop.");
+  btn.textContent = "Stop & download";
+};
+</script>

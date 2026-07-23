@@ -1,0 +1,3 @@
+{"chunk": 7, "word": "2:282:47", "word_status": "error", "trimmed": false, "error_type": "tashkeel", "speech_error_type": "delete", "confidence": 0.830078125, "expected_ph": "هُ", "predicted_ph": "ه", "rules": []}
+{"chunk": 18, "word": "2:282:127", "word_status": "error", "trimmed": false, "error_type": "tajweed", "speech_error_type": "replace", "confidence": 0.90234375, "expected_ph": "ۦۦۦۦ", "predicted_ph": "ۦۦ", "rules": ["Aared Madd"]}
+{"chunk": 18, "word": "2:282:127", "word_status": "error", "trimmed": false, "error_type": "normal", "speech_error_type": "delete", "confidence": null, "expected_ph": "م", "predicted_ph": "", "rules": []}

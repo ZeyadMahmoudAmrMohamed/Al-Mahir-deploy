@@ -76,7 +76,10 @@ def _tone(n: int, amp: float = 0.5) -> torch.Tensor:
 
 
 def test_endpointing_splits_on_silence():
-    s = get_settings()
+    # Pin overlap off: this asserts raw endpointing boundaries, and overlap deliberately
+    # moves the second chunk's start_sample back into the first (its own test covers
+    # that). get_settings() would otherwise pick up a .env chunk_overlap_ms.
+    s = get_settings().model_copy(update={"chunk_overlap_ms": 0})
     sr = s.sample_rate
     session = StreamSession(_StubVAD(), s)
 

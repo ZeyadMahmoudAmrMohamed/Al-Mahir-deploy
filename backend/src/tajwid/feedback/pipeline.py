@@ -9,9 +9,9 @@ from .rules import filter_rules
 from .session import SessionState, advance
 from .sifat import compare_sifat
 from .track import track
-from .types import FeedbackError, FeedbackResponse, LocateResult, MuaalemOutput
+from .types import FeedbackError, FeedbackResponse, LocateResult, MuaalemOutput, Span
 from .nonverse import strip_non_verse
-from .words import aggregate, trim_edges
+from .words import aggregate, blank_word_at, trim_edges
 
 
 def _place_sifa_error(err: FeedbackError, ref, ref_groups: list[str]) -> FeedbackError:
@@ -67,6 +67,8 @@ def analyse_session(
     output: MuaalemOutput,
     state: SessionState,
     error_ratio: float = 0.1,
+    forced: bool = False,
+    overlap_seam: "Span | None" = None,
 ) -> tuple[FeedbackResponse, SessionState]:
     """Session-aware analysis: track around the cursor, fall back to a cold search.
 
@@ -125,7 +127,14 @@ def analyse_session(
             found = locate(verse_phonemes, error_ratio=error_ratio)
 
     response = _analyse_located(
-        found, stripped, state.moshaf, state.strictness, trim=True, rules=state.rules
+        found,
+        stripped,
+        state.moshaf,
+        state.strictness,
+        trim=True,
+        rules=state.rules,
+        forced=forced,
+        overlap_seam=overlap_seam,
     )
     response.non_verse = non_verse
     return response, advance(state, found)
@@ -138,11 +147,16 @@ def _analyse_located(
     strictness: str,
     trim: bool = False,
     rules: frozenset[str] | None = None,
+    forced: bool = False,
+    overlap_seam: "Span | None" = None,
 ) -> FeedbackResponse:
     """Everything downstream of "we know which words these are".
 
     `trim` is for the STREAMING path only (FR-010). A record-then-submit recitation was
-    not cut by us, so it has no boundary artefacts to forgive.
+    not cut by us, so it has no boundary artefacts to forgive. `forced` says whether the
+    chunk ended on a max-length cut (trim its last word) or a waqf (score it, pausal).
+    `overlap_seam` is the previous chunk's span-final word, re-sent as this chunk's head
+    under overlap and therefore not to be re-graded here (see blank_word_at).
     """
     predicted = output.phonemes.text
 
@@ -179,7 +193,9 @@ def _analyse_located(
     )
 
     if trim and found.end is not None:
-        words = trim_edges(words, found.span, found.end)
+        words = trim_edges(words, found.span, found.end, forced)
+        if overlap_seam is not None:
+            words = blank_word_at(words, overlap_seam)
 
     return FeedbackResponse(
         status="ok",

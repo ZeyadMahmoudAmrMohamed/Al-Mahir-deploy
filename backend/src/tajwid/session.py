@@ -33,6 +33,7 @@ from .asr.vad import load_vad
 from .config import Settings, get_settings
 from .feedback.confidence import STRICTNESS
 from .feedback.pipeline import analyse_session
+from .feedback.rules import catalogue
 from .feedback.session import SessionState
 from .feedback.types import (
     SIFA_ATTRS,
@@ -120,6 +121,31 @@ def resolve_strictness(raw: str | None, settings: Settings | None = None) -> str
     return s.strictness if s.strictness in STRICTNESS else "normal"
 
 
+def resolve_rules(
+    raw: frozenset[str] | None, settings: Settings | None = None
+) -> frozenset[str] | None:
+    """The session's leniency selection, with sifat withheld unless asked for.
+
+    `None` means "grade everything", which is the right default for tajwid and the
+    wrong one for sifat today: the sifa comparison is measurably unreliable (see
+    `Settings.grade_sifat` and FINDINGS.md) and its findings arrive at confidence
+    1.000, so they cannot soften to `almost` — they land as confident accusations on
+    correct recitation. Until the reference derivation is audited, an unspecified
+    selection resolves to every TAJWID rule and no sifa.
+
+    An EXPLICIT selection is honoured whole, sifa keys included. Turning the default
+    off is not the same as removing the feature, and a client that asks to be graded
+    on الغنة is making a real choice — that is how this gets re-evaluated once the
+    reference side is fixed.
+    """
+    s = settings or get_settings()
+    if raw is not None or s.grade_sifat:
+        return raw
+    return frozenset(
+        r["key"] for r in catalogue() if r["kind"] != "sifa"
+    )
+
+
 class LiveSession:
     """One reciter's live stream: endpointing + ASR + tracking feedback."""
 
@@ -143,10 +169,16 @@ class LiveSession:
             session_id=session_id,
             cursor=start,
             strictness=resolve_strictness(strictness, self.s),
-            rules=rules,
+            rules=resolve_rules(rules, self.s),
         )
         self.include_units = include_units
         self.seq = 0
+        # For chunk overlap: the previous chunk's span-final word (re-sent as this
+        # chunk's head, so not to be re-graded) and whether that chunk ended on a
+        # forced cut (in which case its last word was chopped, not paused, and the
+        # overlap SHOULD rescue it). None until the first chunk has been scored.
+        self._prev_end: Optional[Span] = None
+        self._prev_forced = False
 
     # -- public API -------------------------------------------------------
     def feed(self, samples: np.ndarray) -> list[dict]:
@@ -178,7 +210,23 @@ class LiveSession:
             return None
 
         output = transcript_to_output(transcript)
-        feedback, self.state = analyse_session(output, self.state)
+
+        # Under overlap, the previous chunk's pausal span-final word is re-sent as this
+        # chunk's head. Don't re-grade it (it was already scored, in pausal form) --
+        # unless that chunk was force-cut, where the word was chopped mid-flow and the
+        # overlap is genuinely rescuing it. No overlap (=0) -> the word was never
+        # re-sent, so _prev_end simply won't be in this chunk's span and the blank is a
+        # harmless no-op.
+        seam = (
+            self._prev_end
+            if self.s.chunk_overlap_ms and not self._prev_forced
+            else None
+        )
+        feedback, self.state = analyse_session(
+            output, self.state, forced=fin.forced, overlap_seam=seam
+        )
+        self._prev_end = self.state.cursor
+        self._prev_forced = fin.forced
 
         event: dict = {
             "type": "feedback",

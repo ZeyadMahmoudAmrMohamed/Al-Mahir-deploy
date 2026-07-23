@@ -91,6 +91,17 @@ class Settings(BaseSettings):
     # Padding added around a finalized speech region before inference (see stream.py).
     chunk_lead_pad_ms: int = 120
     chunk_trail_pad_ms: int = 240
+    # Re-send this much of the previous chunk's tail as the head of the next one, so a
+    # word on a chunk boundary is INTERIOR to the following chunk and gets scored there
+    # instead of being blanked by feedback.words.trim_edges.
+    #
+    # 0 disables it (the historical behaviour). Two words is the minimum that helps:
+    # trim_edges blanks words[0] whenever the span starts mid-aya, so one word of
+    # overlap merely re-trims the same word in the next chunk. At the measured learner
+    # pace (~0.74 words/s) two words is ~2700 ms; at studio pace (~2 words/s) ~1000 ms.
+    # Costs proportionally more inference per chunk -- measure before raising it.
+    # See FINDINGS.md.
+    chunk_overlap_ms: int = 0
 
     # --- W2V-BERT segmenter (chunker for the offline whole-file batch path) ---
     segmenter_batch_size: int = 8
@@ -99,6 +110,20 @@ class Settings(BaseSettings):
     pad_duration_ms: int = 60
 
     # --- Feedback defaults ------------------------------------------------
+    # Grade the 10 sifat attributes. OFF pending an audit of the reference-side
+    # derivation: measured over three recitations, sifat produced ~95% of all findings
+    # at a median confidence of 1.000, and a PROFESSIONAL recitation
+    # (tests/assets/fatiha_long_track.wav) scored 80% of its words as errors. The
+    # confusions are symmetric in both directions (ghonna maghnoon->not_maghnoon 16
+    # times AND not_maghnoon->maghnoon 16 times), which is the signature of comparing
+    # against the wrong reference groups rather than a biased model head. Since the
+    # sifa confidence threshold is 0.85 and the confidences are 1.000, none of these
+    # can degrade to `almost` — every one is a confident false accusation, which is
+    # the single thing Constitution VI forbids. See FINDINGS.md.
+    #
+    # This is a DEFAULT, not a removal: a session that explicitly names sifa keys in
+    # the start message's `rules` still gets them graded.
+    grade_sifat: bool = False
     # The reciter's style. Overridable per session in the WS config message.
     madd_monfasel_len: int = 4
     madd_mottasel_len: int = 4
@@ -181,6 +206,10 @@ class Settings(BaseSettings):
     @property
     def chunk_trail_pad_samples(self) -> int:
         return int(self.chunk_trail_pad_ms * self.sample_rate / 1000)
+
+    @property
+    def chunk_overlap_samples(self) -> int:
+        return int(self.chunk_overlap_ms * self.sample_rate / 1000)
 
 
 @lru_cache
