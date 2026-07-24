@@ -1,8 +1,15 @@
 import json
 import wave as wavemod
+from pathlib import Path
+
+import numpy as np
+import pytest
+from fastapi.testclient import TestClient
 
 from tajwid.capture import CAPTURED_SETTINGS, open_capture
 from tajwid.config import Settings
+
+ASSETS = Path(__file__).resolve().parent / "assets"
 
 
 def test_gate_needs_both_keys(tmp_path):
@@ -85,3 +92,89 @@ def test_write_failure_does_not_raise(tmp_path, monkeypatch):
     cap.frame(b"\x00\x00" * 320)  # still silent once dead
     cap.events([{"type": "x"}])
     cap.close()
+
+
+# --- The WS/REST surface ------------------------------------------------------
+
+
+@pytest.fixture
+def capture_client(monkeypatch, tmp_path):
+    """A mock-engine app with capture enabled, plus the directory it records into."""
+    monkeypatch.setenv("TAJWID_ASR_ENGINE", "mock")
+    monkeypatch.setenv("TAJWID_CAPTURE_DIR", str(tmp_path))
+    from tajwid.config import get_settings
+    from tajwid.main import create_app
+
+    get_settings.cache_clear()
+    with TestClient(create_app()) as c:
+        yield c, tmp_path
+    get_settings.cache_clear()
+
+
+def test_health_reports_capture_availability(capture_client):
+    client, _ = capture_client
+    assert client.get("/health").json()["capture_available"] is True
+
+
+def test_health_reports_capture_unavailable_without_a_dir(monkeypatch):
+    monkeypatch.setenv("TAJWID_ASR_ENGINE", "mock")
+    monkeypatch.delenv("TAJWID_CAPTURE_DIR", raising=False)
+    from tajwid.config import get_settings
+    from tajwid.main import create_app
+
+    get_settings.cache_clear()
+    with TestClient(create_app()) as c:
+        assert c.get("/health").json()["capture_available"] is False
+    get_settings.cache_clear()
+
+
+def _stream(client, *, capture: bool):
+    """Drive one session through the real WS handler. Returns the `session` ack."""
+    from tajwid.asr.batch import load_audio
+
+    wave = load_audio(ASSETS / "test.wav", 16000).numpy()
+    pcm = (np.clip(wave, -1, 1) * 32767).astype("<i2")
+    start = {"type": "start", "sura": 1, "aya": 1, "word_idx": 0}
+    if capture:
+        start["capture"] = True
+    with client.websocket_connect("/ws/session") as ws:
+        ws.send_text(json.dumps(start))
+        ack = json.loads(ws.receive_text())
+        for i in range(0, len(pcm), 1600):
+            ws.send_bytes(pcm[i : i + 1600].tobytes())
+        ws.send_text(json.dumps({"type": "end"}))
+        while True:
+            msg = json.loads(ws.receive_text())
+            if msg.get("type") == "done":
+                break
+    return ack
+
+
+def test_ws_records_when_asked(capture_client):
+    client, root = capture_client
+    ack = _stream(client, capture=True)
+
+    assert ack["capture"] is True
+    d = root / ack["session_id"]
+    assert {p.name for p in d.iterdir()} == {
+        "input.wav",
+        "frames.jsonl",
+        "events.jsonl",
+        "start.json",
+    }
+    frames = [json.loads(x) for x in (d / "frames.jsonl").read_text().splitlines()]
+    assert frames and sum(f["n"] for f in frames) > 0
+    with wavemod.open(str(d / "input.wav"), "rb") as w:
+        assert w.getnframes() == sum(f["n"] for f in frames)
+    # The resolved config must record what the SERVER chose, not what was requested.
+    start = json.loads((d / "start.json").read_text(encoding="utf-8"))
+    assert start["resolved"]["engine"] == "mock"
+    assert start["resolved"]["strictness"] in ("lenient", "normal", "strict")
+
+
+def test_ws_records_nothing_when_not_asked(capture_client):
+    """A normal session is byte-identical to today's behaviour."""
+    client, root = capture_client
+    ack = _stream(client, capture=False)
+    assert ack["capture"] is False
+    assert list(root.iterdir()) == []
