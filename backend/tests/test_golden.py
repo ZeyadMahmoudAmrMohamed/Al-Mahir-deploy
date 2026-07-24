@@ -98,3 +98,55 @@ def test_phoneme_fixtures_match_the_phonetizer(moshaf):
     # A correctly-recited verse must diff to nothing. This is the same invariant
     # tests/golden/alm_correct.json locks in, asserted against the constant.
     assert phonemes_of(2, 1) == AL_BAQARAH_2_1_CORRECT
+
+
+def test_leen_madd_at_length_two_does_not_crash_the_phonetizer():
+    """madd_alleen_len=2 made the leen substitution NET-DELETING (the pattern captures
+    the sukun after the madd letter, the replacement does not restore it, and at length
+    2 only one madd letter is added). That took get_mappings' `delete` branch, which
+    attaches the rule to a zero-width mapping pointing at the FOLLOWING consonant, and
+    the waw/yaa tag lookup raised KeyError -- discarding the reciter's whole chunk.
+
+    Observed live on 6:143 (ٱثْنَيْنِ) as KeyError('ن'), four chunks lost in one session.
+    """
+    from quran_transcript import MoshafAttributes, quran_phonetizer
+
+    from tajwid.session import default_moshaf
+
+    cfg = default_moshaf().model_dump()
+    cfg["madd_aared_len"] = 2
+    cfg["madd_alleen_len"] = 2
+    uthmani = "ثَمَـٰنِيَةَ أَزْوَٰجٍۢ مِّنَ ٱلضَّأْنِ ٱثْنَيْنِ وَمِنَ ٱلْمَعْزِ ٱثْنَيْنِ"
+
+    result = quran_phonetizer(uthmani, MoshafAttributes(**cfg), remove_spaces=True)
+    assert result.phonemes
+
+    # The tag must still be recovered, not merely not-crash: the madd letter sits one
+    # position before the zero-width mapping.
+    tags = {
+        rule.tag
+        for m in result.mappings
+        for rule in (m.tajweed_rules or [])
+        if rule.name.en == "Leen Madd"
+    }
+    assert tags == {"yaa"}
+
+
+def test_leen_madd_at_length_four_is_unchanged():
+    """The fix must be a no-op wherever the old code worked."""
+    from quran_transcript import MoshafAttributes, quran_phonetizer
+
+    from tajwid.session import default_moshaf
+
+    uthmani = "ثَمَـٰنِيَةَ أَزْوَٰجٍۢ مِّنَ ٱلضَّأْنِ ٱثْنَيْنِ وَمِنَ ٱلْمَعْزِ ٱثْنَيْنِ"
+    result = quran_phonetizer(uthmani, default_moshaf(), remove_spaces=True)
+
+    # Four-count leen: three extra yaas, versus one at length two.
+    assert result.phonemes.endswith("ثنَييين")
+    tags = {
+        rule.tag
+        for m in result.mappings
+        for rule in (m.tajweed_rules or [])
+        if rule.name.en == "Leen Madd"
+    }
+    assert tags == {"yaa"}

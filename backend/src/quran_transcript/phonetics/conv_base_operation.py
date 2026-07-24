@@ -407,6 +407,20 @@ def get_mappings(
     assert all(m is not None for m in new_mappings)
 
     # Special Case where we want to assgin the tag for Leen Madd
+    #
+    # The tag (waw vs yaa) is recovered by re-reading the OUTPUT text at the mapped
+    # position. That is only correct when the leen substitution EXPANDED the text: the
+    # pattern captures the sukun after the madd letter but the replacement does not put
+    # it back, so at `madd_alleen_len == 4` three yaas are added and the text grows,
+    # while at `madd_alleen_len == 2` only one is added and the text SHRINKS by that
+    # sukun. A net deletion takes the `delete` branch above, which attaches the rule to
+    # a zero-width mapping positioned at the FOLLOWING character -- the consonant, not
+    # the madd letter. `_madd_to_tag[...]` then raised KeyError and killed the whole
+    # phonetization (observed as KeyError('ن') on ٱثْنَيْنِ, 6:143, with madd_alleen_len=2).
+    #
+    # For a zero-width mapping the madd letter is the character immediately before it,
+    # so fall back to that. When the position already holds a madd letter -- every case
+    # that worked before -- the first lookup succeeds and nothing changes.
     for m_idx in range(len(new_mappings)):
         if new_mappings[m_idx].tajweed_rules:
             for taj_idx in range(len(new_mappings[m_idx].tajweed_rules)):
@@ -414,12 +428,20 @@ def get_mappings(
                     new_mappings[m_idx].tajweed_rules[taj_idx].name.en == "Leen Madd"
                     and new_mappings[m_idx].tajweed_rules[taj_idx].tag is None
                 ):
-                    tag = (
-                        new_mappings[m_idx]
-                        .tajweed_rules[taj_idx]
-                        ._madd_to_tag[new_text[new_mappings[m_idx].pos[0]]]
+                    madd_to_tag = (
+                        new_mappings[m_idx].tajweed_rules[taj_idx]._madd_to_tag
                     )
-                    new_mappings[m_idx].tajweed_rules[taj_idx].tag = tag
+                    start = new_mappings[m_idx].pos[0]
+                    tag = None
+                    if 0 <= start < len(new_text):
+                        tag = madd_to_tag.get(new_text[start])
+                    if tag is None and 0 < start <= len(new_text):
+                        tag = madd_to_tag.get(new_text[start - 1])
+                    # Leaving the tag None is survivable (it degrades to an untagged
+                    # leen madd); raising is not, because it discards the reciter's
+                    # entire chunk.
+                    if tag is not None:
+                        new_mappings[m_idx].tajweed_rules[taj_idx].tag = tag
 
     # Special case where we have Idgham tanween
     # Special sympol `tanweed_idgham_detrminer` has no meaning moving it to the tanween
