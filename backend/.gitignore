@@ -29,3 +29,11 @@ models/
 *.tmp
 *.swp
 *.wav
+
+# Derived from experiments/streaming_flow.py via jupytext. The .py is the source of
+# truth: it is diffable and reviewable, an .ipynb with embedded audio is neither
+# (one executed run is ~3 MB of base64).
+experiments/*.ipynb
+
+# Diagnostic captures (see src/tajwid/capture.py) — a reciter's raw audio.
+captures/
