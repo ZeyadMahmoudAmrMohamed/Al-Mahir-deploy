@@ -41,8 +41,11 @@ from probe_stream import (  # noqa: E402
 from resample_compare import compare, decimate, filter_response  # noqa: E402
 from tajwid.feedback.types import Span  # noqa: E402
 
-# A captured session directory, e.g. Path("/tmp/tajcap/6f1e...").
-SESSION = None
+# A captured session directory, produced by the Diagnose toggle. Set to None to fall
+# back to the reference files. Pick the newest capture automatically so this does not
+# need editing after every recitation.
+_caps = sorted(Path("captures").glob("*/input.wav"), key=lambda p: p.stat().st_mtime)
+SESSION = _caps[-1].parent if _caps else None
 
 ASSETS = Path("tests/assets")
 # (path, where the reciter starts). The start span seeds the cursor; the MOCK engine

@@ -37,3 +37,5 @@ experiments/*.ipynb
 
 # Diagnostic captures (see src/tajwid/capture.py) — a reciter's raw audio.
 captures/
+# Derived plots of a reciter's own captured audio.
+experiments/vad_plots/
