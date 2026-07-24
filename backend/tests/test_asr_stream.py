@@ -232,3 +232,99 @@ def test_streaming_live_session_end_to_end():
     ok = [e for e in events if e["feedback"]["status"] == "ok"]
     assert ok, "no chunk matched the seeded location"
     assert ok[0]["feedback"]["span"]["sura"] == 53
+
+
+# --- Energy hangover (Settings.vad_hangover_db) --------------------------------
+
+
+def _hangover_stream(hangover_db, probs):
+    """A StreamSession whose VAD returns a scripted probability sequence."""
+    import torch
+
+    from tajwid.asr.stream import StreamSession
+    from tajwid.config import Settings
+
+    class ScriptedVad:
+        def __init__(self, seq):
+            self.seq, self.i = seq, 0
+
+        def __call__(self, window, sr):
+            p = self.seq[min(self.i, len(self.seq) - 1)]
+            self.i += 1
+            return torch.tensor(p)
+
+        def reset_states(self):
+            pass
+
+    s = Settings(vad_hangover_db=hangover_db, chunk_overlap_ms=0)
+    return StreamSession(ScriptedVad(probs), s), s
+
+
+def test_hangover_extends_a_chunk_through_a_loud_low_probability_tail():
+    """The real failure: silero reports non-speech on a sustained madd while the audio
+    is still 34-42 dB above the floor, so the chunk ends mid-word. Measured on a real
+    session, this cost the final ـين of ٱلضَّآلِّينَ (1090 ms)."""
+    import numpy as np
+
+    w = 1536
+    # 3 quiet windows (establish the floor), 5 loud speech, 6 loud but silero says
+    # non-speech (the madd tail), then 6 genuinely quiet.
+    probs = [0.0] * 3 + [0.9] * 5 + [0.1] * 6 + [0.0] * 6
+    audio = np.concatenate(
+        [
+            np.full(3 * w, 1e-4, dtype=np.float32),
+            np.full(5 * w, 0.2, dtype=np.float32),
+            np.full(6 * w, 0.05, dtype=np.float32),  # ~54 dB over the floor
+            np.full(6 * w, 1e-4, dtype=np.float32),
+        ]
+    )
+
+    off, _ = _hangover_stream(0.0, probs)
+    on, _ = _hangover_stream(20.0, probs)
+    a = off.feed(audio) + off.flush()
+    b = on.feed(audio) + on.flush()
+
+    assert a and b
+    # With the hangover the utterance runs through the loud tail; without it, it stops.
+    assert b[0].end_sample > a[0].end_sample
+    assert b[0].end_sample >= (3 + 5 + 6) * w
+
+
+def test_hangover_does_not_bridge_genuine_silence():
+    """The safety property: at a real waqf the energy collapses to the floor, so the
+    hangover must not hold the chunk open and merge two utterances into one."""
+    import numpy as np
+
+    w = 1536
+    probs = [0.0] * 3 + [0.9] * 4 + [0.0] * 8 + [0.9] * 4 + [0.0] * 4
+    audio = np.concatenate(
+        [
+            np.full(3 * w, 1e-4, dtype=np.float32),
+            np.full(4 * w, 0.2, dtype=np.float32),
+            np.full(8 * w, 1e-4, dtype=np.float32),  # true silence at the floor
+            np.full(4 * w, 0.2, dtype=np.float32),
+            np.full(4 * w, 1e-4, dtype=np.float32),
+        ]
+    )
+    on, _ = _hangover_stream(20.0, probs)
+    chunks = on.feed(audio) + on.flush()
+    assert len(chunks) == 2, "genuine silence must still end the utterance"
+
+
+def test_hangover_zero_is_the_old_behaviour_exactly():
+    import numpy as np
+
+    w = 1536
+    probs = [0.0] * 3 + [0.9] * 5 + [0.1] * 6 + [0.0] * 6
+    audio = np.concatenate(
+        [
+            np.full(3 * w, 1e-4, dtype=np.float32),
+            np.full(5 * w, 0.2, dtype=np.float32),
+            np.full(6 * w, 0.05, dtype=np.float32),
+            np.full(6 * w, 1e-4, dtype=np.float32),
+        ]
+    )
+    off, s = _hangover_stream(0.0, probs)
+    chunks = off.feed(audio) + off.flush()
+    # Speech ends at window 8; _extract then adds the trailing pad on a waqf cut.
+    assert chunks[0].end_sample == (3 + 5) * w + s.chunk_trail_pad_samples

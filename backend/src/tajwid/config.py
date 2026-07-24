@@ -86,6 +86,22 @@ class Settings(BaseSettings):
     min_silence_endpoint_ms: int = 300
     # Discard finalized speech shorter than this as noise (breaths/clicks).
     min_speech_ms: int = 200
+    # Energy hangover, in dB above the running noise floor.
+    #
+    # silero is a LEARNED speech/non-speech classifier trained on conversational speech,
+    # not an energy gate. A sustained Quranic madd followed by a ghunnah nasal is nearly
+    # stationary -- steady pitch, no formant transitions -- and reads as out-of-
+    # distribution: measured on real sessions its probability falls to 0.15 while the
+    # audio is still 34-42 dB above the noise floor. The chunk then ends mid-word and the
+    # remainder is orphaned (excluded from this chunk, too short to become its own).
+    # Observed on 9 of 70 chunks across 8 sessions, losing up to 1090 ms -- the final
+    # ـين of ٱلضَّآلِّينَ, among others.
+    #
+    # While in speech, a window silero calls silence is NOT counted toward the endpoint
+    # while its energy is still this far above the floor. True silence measures 0-7 dB
+    # above the floor, so 20 dB separates the two cases with ~13 dB of headroom on each
+    # side. Set 0 to disable and get the pre-hangover behaviour exactly.
+    vad_hangover_db: float = 20.0
     # Hard cap per chunk: the Muaalem model was trained on <=20 s waqf segments.
     max_chunk_s: float = 19.0
     # Padding added around a finalized speech region before inference (see stream.py).

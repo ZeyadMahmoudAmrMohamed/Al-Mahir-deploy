@@ -62,6 +62,12 @@ class StreamSession:
         # (see Settings.chunk_overlap_ms). Empty when overlap is disabled.
         self._overlap_tail = torch.zeros(0, dtype=torch.float32)
 
+        # Running noise floor for the energy hangover (see Settings.vad_hangover_db).
+        # None until the first window; tracked as a slow-rising, fast-falling minimum so
+        # it follows the room rather than a fixed absolute level -- autoGainControl is on
+        # in the browser, so the same room lands at a different level every session.
+        self._noise_floor: float | None = None
+
         self.vad.reset_states()
 
     # -- public API -------------------------------------------------------
@@ -100,6 +106,9 @@ class StreamSession:
             w_end_abs = w_start_abs + self.window
             is_speech = prob > self.s.vad_threshold
 
+            rms = float(torch.sqrt(torch.mean(window.to(torch.float64) ** 2)))
+            self._track_noise_floor(rms)
+
             if is_speech:
                 if not self._in_speech:
                     self._in_speech = True
@@ -107,7 +116,16 @@ class StreamSession:
                 self._last_speech_end_abs = w_end_abs
                 self._trailing_silence = 0
             elif self._in_speech:
-                self._trailing_silence += self.window
+                # Energy hangover. silero is a learned classifier, not an energy gate:
+                # on a sustained madd + ghunnah it reports non-speech while the audio is
+                # still 34-42 dB above the floor. Counting that as silence ends the chunk
+                # mid-word. While the sound is demonstrably still there, extend the
+                # utterance instead of closing it -- see Settings.vad_hangover_db.
+                if self._still_sounding(rms):
+                    self._last_speech_end_abs = w_end_abs
+                    self._trailing_silence = 0
+                else:
+                    self._trailing_silence += self.window
 
             # Finalize on a long-enough waqf. Speech shorter than min_speech is dropped as
             # noise (a breath/click) rather than emitted as a chunk.
@@ -149,6 +167,26 @@ class StreamSession:
 
         self._trim()
         return chunks
+
+    def _track_noise_floor(self, rms: float) -> None:
+        """Follow the quietest recent level: snap down, creep up.
+
+        Asymmetric on purpose. Snapping down means a genuine silence re-establishes the
+        floor immediately; creeping up (0.5% per ~96 ms window, ~2 dB/s) means a long
+        held note cannot drag the floor with it and silence itself. A symmetric average
+        would be pulled up by speech, which is precisely the signal we are measuring
+        against.
+        """
+        if self._noise_floor is None or rms < self._noise_floor:
+            self._noise_floor = rms
+        else:
+            self._noise_floor *= 1.005
+
+    def _still_sounding(self, rms: float) -> bool:
+        """Is this window's energy still well above the room, despite silero?"""
+        if self.s.vad_hangover_db <= 0 or self._noise_floor is None:
+            return False
+        return rms > self._noise_floor * (10 ** (self.s.vad_hangover_db / 20.0))
 
     def _extract(self, start_abs: int, end_abs: int, *, forced: bool) -> FinalizedChunk:
         lead = self.s.chunk_lead_pad_samples
