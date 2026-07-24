@@ -40,32 +40,54 @@ def match_forward(
     word indices (0-based from the anchor).
 
     ``word_char_ends[k]`` is the cumulative char length of ``expected_norm`` through word k.
-    A word is CONFIRMED when its expected chars are behind the matched extent, minus a
-    ``lookahead_words`` tail (the last word is still in flight). A word is SKIPPED when its
-    expected chars sit entirely before the first matched char. ``min_match_ratio`` is the
+    A word is CONFIRMED when it lies inside the best-matching expected PREFIX, minus a
+    ``lookahead_words`` tail (the last word is still in flight). A word is SKIPPED when it
+    sits before the point the partial actually starts matching. ``min_match_ratio`` is the
     stall guard: too little literal agreement and we assert nothing.
+
+    Why a prefix scan rather than one ``opcodes`` pass over the whole window: an edit-
+    distance alignment MAXIMISES matched characters, so it behaves like an LCS across the
+    entire window. Arabic phoneme text has a small alphabet where ل ا م ن recur in every
+    word, so a few stray characters at the tail of a noisy partial get paired with letters
+    far ahead, and the last such pairing reads as "the reciter got this far". Measured: 5
+    words recited, 10% ASR error -> 35 of 40 words confirmed. A char-ratio guard cannot
+    catch it (that case scores 100% agreement); the extent itself has to be constrained.
+
+    Over-confirming is the dangerous direction, not under-confirming: in hidden (hifz)
+    mode a confirmed word is revealed on the page, so running ahead hands the reciter the
+    words they were trying to recall. A stalled tick costs nothing -- the Muaalem waqf
+    grade re-anchors moments later.
     """
-    if not partial_norm or not expected_norm:
+    if not partial_norm or not expected_norm or not word_char_ends:
         return [], []
 
-    ops = lv.opcodes(partial_norm, expected_norm)
-    equal_chars = sum(j2 - j1 for tag, _i1, _i2, j1, j2 in ops if tag == "equal")
-    consumed = [(j1, j2) for tag, _i1, _i2, j1, j2 in ops if tag in ("equal", "replace")]
+    # 1. Which expected PREFIX best explains the partial? Raw edit distance is minimised
+    #    at the true extent: past it each surplus expected char costs an insertion,
+    #    before it each missing one costs a deletion. Only word boundaries are candidates,
+    #    so this is <=len(window) C-level distance calls.
+    last = min(range(len(word_char_ends)), key=lambda k: lv.distance(partial_norm, expected_norm[: word_char_ends[k]]))
+    end = word_char_ends[last]
 
-    # Stall: the partial doesn't line up with the expected text well enough to trust.
-    if not consumed or equal_chars < min_match_ratio * len(partial_norm):
+    # 2. Stall guard, over the chosen prefix: normalised agreement, not raw overlap.
+    if lv.distance(partial_norm, expected_norm[:end]) > (1.0 - min_match_ratio) * max(
+        len(partial_norm), end
+    ):
         return [], []
 
-    first_match = consumed[0][0]
-    matched_extent = consumed[-1][1]
+    # 3. Did the reciter start partway in? Trimming leading words only wins if it makes
+    #    the alignment strictly cheaper, so an on-cue start reports no skip.
+    starts = [0, *word_char_ends[:-1]]
+    best = lv.distance(partial_norm, expected_norm[:end])
+    first = 0
+    for k in range(1, last + 1):
+        d = lv.distance(partial_norm, expected_norm[starts[k] : end])
+        if d < best:
+            best, first = d, k
 
-    skipped = [k for k, end in enumerate(word_char_ends) if end <= first_match]
-    covered = [k for k, end in enumerate(word_char_ends) if end <= matched_extent]
+    covered = list(range(first, last + 1))
     if lookahead_words:
-        covered = covered[:-lookahead_words]
-    skipset = set(skipped)
-    confirmed = [k for k in covered if k not in skipset]
-    return confirmed, skipped
+        covered = covered[:-lookahead_words] if lookahead_words < len(covered) else []
+    return covered, list(range(first))
 
 
 class LiveAligner:
