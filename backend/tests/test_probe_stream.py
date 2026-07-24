@@ -205,3 +205,100 @@ def test_replay_splits_at_the_recorded_frame_boundaries(capture_dir):
     assert sum(sizes) == audio.size
     assert cfg["resolved"]["engine"] == "mock"
     assert any(e["type"] == "feedback" for e in events)
+
+
+# --- Boundary measurement -----------------------------------------------------
+
+
+def test_sound_end_finds_a_tone_that_stops_at_one_second():
+    """A tone that stops at 1.0 s must be detected as ending at ~1.0 s -- not at
+    whatever moment an endpointer stopped looking."""
+    from probe_stream import noise_floor, sound_end_sample
+
+    sr = 16000
+    t = np.arange(int(1.5 * sr)) / sr
+    audio = np.zeros_like(t, dtype=np.float32)
+    audio[:sr] = (np.sin(2 * np.pi * 300 * t[:sr]) * 0.3).astype(np.float32)
+    audio += np.random.default_rng(0).normal(0, 1e-4, audio.size).astype(np.float32)
+
+    floor = noise_floor(audio, sr)
+    assert floor < 0.01
+    end = sound_end_sample(audio, sr, from_sample=int(0.5 * sr), floor=floor)
+    assert abs(end - sr) < 0.05 * sr  # within 50 ms of the true end
+
+
+def test_sound_end_reports_nothing_after_a_span_that_already_covers_the_sound():
+    """A chunk whose end is past the audio must not report a positive gap."""
+    from probe_stream import noise_floor, sound_end_sample
+
+    sr = 16000
+    audio = np.zeros(sr, dtype=np.float32)
+    audio[: sr // 2] = 0.3
+    floor = noise_floor(audio, sr)
+    end = sound_end_sample(audio, sr, from_sample=int(0.9 * sr), floor=floor)
+    assert end <= int(0.9 * sr) + 1
+
+
+def test_sound_end_stops_looking_before_the_next_utterance():
+    """Two utterances separated by 3 s of silence: measuring the tail of the first
+    must not run into the second and report a 3-second 'tail'."""
+    from probe_stream import noise_floor, sound_end_sample
+
+    sr = 16000
+    audio = np.zeros(6 * sr, dtype=np.float32)
+    audio[: sr] = 0.3  # utterance A, 0-1 s
+    audio[4 * sr : 5 * sr] = 0.3  # utterance B, 4-5 s
+    floor = noise_floor(audio, sr)
+    end = sound_end_sample(audio, sr, from_sample=sr, floor=floor, limit_ms=2000.0)
+    assert end < 4 * sr
+
+
+def test_breath_between_words_does_not_count_as_continuing_speech():
+    """The failure that a 6 dB margin caused on real audio: an inter-word breath sits
+    a few dB above the noise floor, so a near-silence threshold reports it as the word
+    still being articulated. Speech here is 40 dB above the floor; breath is ~8 dB."""
+    from probe_stream import noise_floor, sound_end_sample
+
+    sr = 16000
+    rng = np.random.default_rng(0)
+    floor_level = 6.5e-4
+    audio = rng.normal(0, floor_level, 3 * sr).astype(np.float32)
+    audio[: sr] += rng.normal(0, 0.064, sr).astype(np.float32)  # speech, ~40 dB up
+    audio[sr : 2 * sr] += rng.normal(0, floor_level * 1.6, sr).astype(np.float32)  # breath
+
+    floor = noise_floor(audio, sr)
+    end = sound_end_sample(audio, sr, from_sample=sr, floor=floor)
+    # The word ended at 1.0 s. The breath must not extend it into the second 1 s.
+    assert end < sr + int(0.15 * sr)
+
+
+def test_tail_report_carries_both_thresholds(result):
+    """A single threshold hides whether a 'cut' is a phoneme or a breath."""
+    from probe_stream import tail_report
+
+    for r in tail_report(result):
+        assert r["tail_gap_ms_strict"] <= r["tail_gap_ms"]
+        assert r["cut_short_strict"] == (r["tail_gap_ms_strict"] > r["trail_pad_ms"])
+        # A strict cut is necessarily also a lenient one.
+        assert not r["cut_short_strict"] or r["cut_short"]
+
+
+def test_band_energy_separates_the_fricative_band_from_a_low_tone():
+    from probe_stream import band_energy
+
+    sr = 16000
+    t = np.arange(sr) / sr
+    low = np.sin(2 * np.pi * 200 * t).astype(np.float32)
+    high = np.sin(2 * np.pi * 6000 * t).astype(np.float32)
+    assert band_energy(high, sr) > 10 * band_energy(low, sr)
+
+
+def test_tail_report_shape(result):
+    from probe_stream import tail_report
+
+    rows = tail_report(result)
+    assert len(rows) == len(result.chunks)
+    for r in rows:
+        assert r["tail_gap_ms"] >= 0
+        assert r["trail_pad_ms"] == result.settings.chunk_trail_pad_ms
+        assert r["cut_short"] == (r["tail_gap_ms"] > r["trail_pad_ms"])

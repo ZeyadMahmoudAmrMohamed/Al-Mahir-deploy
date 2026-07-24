@@ -294,6 +294,166 @@ def replay(session_dir, *, settings: Settings | None = None, engine=None) -> Pro
     return result
 
 
+# --- Boundary measurement ------------------------------------------------------
+#
+# The decisive test for "the last letter is missing". `stream.py` ends a chunk at
+# `_last_speech_end_abs` -- the end of the last window scoring above `vad_threshold`,
+# which is 0.6, raised from silero's 0.3 default so shallow waqf dips register as
+# silence. A raised threshold truncates trailing low-energy phonemes EARLIEST, and an
+# unvoiced fricative or a sukun-final consonant carries little energy.
+# `chunk_trail_pad_ms` (240) exists to cover the difference. Whether it does is what
+# these functions measure.
+
+
+def _frame_rms(audio: np.ndarray, sr: int, hop_ms: float) -> np.ndarray:
+    hop = max(1, int(hop_ms * sr / 1000))
+    n = audio.size // hop
+    if n == 0:
+        return np.zeros(0, dtype=np.float32)
+    framed = audio[: n * hop].reshape(n, hop).astype(np.float64)
+    return np.sqrt((framed**2).mean(axis=1)).astype(np.float32)
+
+
+def noise_floor(audio: np.ndarray, sr: int, hop_ms: float = 10.0) -> float:
+    """The session's noise floor: the 10th percentile of frame RMS.
+
+    A percentile, not an absolute threshold, because `autoGainControl` is on in
+    `mic.ts` -- the same room at the same loudness lands at a different absolute level
+    depending on what the AGC did, so any fixed number is wrong for some session.
+    """
+    rms = _frame_rms(audio, sr, hop_ms)
+    return float(np.percentile(rms, 10)) if rms.size else 0.0
+
+
+def sound_end_sample(
+    audio: np.ndarray,
+    sr: int,
+    from_sample: int,
+    floor: float,
+    hop_ms: float = 10.0,
+    margin_db: float = 15.0,
+    limit_ms: float = 2000.0,
+) -> int:
+    """Where the sound that was still going at ``from_sample`` actually stops.
+
+    Scans forward and returns the FIRST frame to drop below the floor, not the last
+    frame above it. That distinction is the whole measurement: on continuous recitation
+    the next utterance begins a few hundred milliseconds later, so "last frame above the
+    floor within a window" lands inside the FOLLOWING word and reports the entire window
+    as this chunk's tail. Measured on A_processed.wav, that mistake reported 22 of 23
+    chunks cut short with every gap pinned at the search limit -- a dramatic result that
+    was purely an artefact of the wrong bound.
+
+    "Above the floor" is ``margin_db`` above ``noise_floor``. The default of 15 dB is
+    chosen to sit between breath and speech, not at the edge of audibility: measured on
+    A_processed.wav the noise floor (p10) is 0.00065 and speech (p50) is 0.064, a 40 dB
+    separation, so an inter-word breath clears 6 dB easily while a trailing unvoiced
+    consonant lands nearer 15-20 dB. At 6 dB this function reports breath as continuing
+    speech. Callers that care should measure at two margins rather than trust one --
+    see ``tail_report``.
+
+    ``limit_ms`` remains as a safety cap for sound that genuinely never stops.
+    """
+    hop = max(1, int(hop_ms * sr / 1000))
+    limit = int(limit_ms * sr / 1000)
+    a = max(0, from_sample)
+    b = min(audio.size, a + limit)
+    if b <= a:
+        return a
+    rms = _frame_rms(audio[a:b], sr, hop_ms)
+    threshold = floor * (10 ** (margin_db / 20.0))
+    below = np.flatnonzero(rms <= threshold)
+    if below.size == 0:
+        return b  # still sounding at the cap
+    return a + int(below[0]) * hop
+
+
+def band_energy(
+    audio: np.ndarray, sr: int, lo_hz: float = 4000.0, hi_hz: float = 8000.0
+) -> float:
+    """Mean spectral energy in a band -- 4-8 kHz by default, where the unvoiced
+    fricatives live.
+
+    Reported beside the RMS tail measure because a fricative dies in the BAND before it
+    dies in broadband RMS, so an energy-only measure systematically under-reports
+    exactly the phonemes under suspicion.
+    """
+    if audio.size == 0:
+        return 0.0
+    spectrum = np.abs(np.fft.rfft(audio.astype(np.float64)))
+    freqs = np.fft.rfftfreq(audio.size, 1.0 / sr)
+    sel = (freqs >= lo_hz) & (freqs < hi_hz)
+    return float((spectrum[sel] ** 2).mean()) if sel.any() else 0.0
+
+
+def tail_gap_ms(
+    result: ProbeResult,
+    seq: int,
+    floor: float | None = None,
+    margin_db: float = 15.0,
+) -> float:
+    """Milliseconds of sound left OUTSIDE a chunk after its end.
+
+    Exceeding ``chunk_trail_pad_ms`` means the chunk provably ends before the sound does.
+    """
+    c = next(x for x in result.chunks if x.seq == seq)
+    sr = result.sample_rate
+    if floor is None:
+        floor = noise_floor(result.audio, sr)
+    end_sample = int(c.end_s * sr)
+    sounding = sound_end_sample(
+        result.audio, sr, end_sample, floor, margin_db=margin_db
+    )
+    return max(0.0, (sounding - end_sample) / sr * 1000.0)
+
+
+def tail_report(result: ProbeResult) -> list[dict]:
+    """One row per chunk: is its tail cut, and did the model lose confidence there?
+
+    Two INDEPENDENT witnesses to the same event. ``cut_short`` is an acoustic claim
+    (sound continued past the chunk); ``prob_drop`` is a model claim (the final phoneme
+    group scored below the chunk's median CTC confidence). Agreement is strong evidence.
+    A disagreement means the reported symptom has another cause, and saying so is as
+    much a result as confirming it.
+
+    The acoustic claim is reported at TWO thresholds, 15 dB and a strict 25 dB above the
+    noise floor, because a single threshold hides the distinction that matters: a chunk
+    cut short at both is genuinely losing a phoneme, while one that qualifies only at
+    the lenient threshold is trailing breath. Do not collapse these into one number
+    without saying which was used.
+    """
+    pad = result.settings.chunk_trail_pad_ms
+    floor = noise_floor(result.audio, result.sample_rate)
+    rows = []
+    for c in result.chunks:
+        gap = tail_gap_ms(result, c.seq, floor=floor, margin_db=15.0)
+        gap_strict = tail_gap_ms(result, c.seq, floor=floor, margin_db=25.0)
+        final = c.group_probs[-1] if c.group_probs else None
+        median = float(np.median(c.group_probs)) if c.group_probs else None
+        rows.append(
+            {
+                "seq": c.seq,
+                "start_s": c.start_s,
+                "end_s": c.end_s,
+                "forced": c.forced,
+                "tail_gap_ms": round(gap, 1),
+                "tail_gap_ms_strict": round(gap_strict, 1),
+                "trail_pad_ms": pad,
+                "cut_short": gap > pad,
+                # The claim that survives a threshold 10 dB stricter. This is the one
+                # to quote: it cannot be trailing breath.
+                "cut_short_strict": gap_strict > pad,
+                "final_group": c.groups[-1] if c.groups else None,
+                "final_group_prob": round(final, 3) if final is not None else None,
+                "median_group_prob": round(median, 3) if median is not None else None,
+                "prob_drop": round(median - final, 3)
+                if final is not None and median is not None
+                else None,
+            }
+        )
+    return rows
+
+
 def _self_check() -> None:
     """Replay a captured session and assert it reproduces the recorded boundaries."""
     import sys
