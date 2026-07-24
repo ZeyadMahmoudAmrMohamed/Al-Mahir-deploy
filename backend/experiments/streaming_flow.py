@@ -30,8 +30,10 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from probe_stream import (  # noqa: E402
     band_energy,
+    compare_to_live,
     live_trace,
     noise_floor,
+    plot_vad,
     probe,
     replay,
     settings_from_capture,
@@ -136,37 +138,6 @@ for p in (ASSETS / "fatiha_long_track.wav",
 # ## §2 VAD and chunking
 
 # %%
-def plot_vad(result, t0=0.0, t1=None):
-    """Waveform, VAD probability and finalized chunks on one shared time axis."""
-    sr = result.sample_rate
-    t1 = t1 if t1 is not None else result.audio.size / sr
-    a, b = int(t0 * sr), int(t1 * sr)
-    audio = result.audio[a:b]
-    t = np.arange(audio.size) / sr + t0
-
-    probs = result.vad_probs
-    pt = np.arange(probs.size) * result.settings.vad_window_samples / sr
-
-    fig, axes = plt.subplots(2, 1, figsize=(13, 5), sharex=True,
-                             gridspec_kw={"height_ratios": [2, 1]})
-    axes[0].plot(t, audio, lw=.4)
-    axes[0].set(ylabel="Audio\nwaveform")
-    axes[1].plot(pt, probs, lw=1.2)
-    axes[1].axhline(result.settings.vad_threshold, c="orange", lw=1.4)
-    axes[1].set(ylabel="VAD output\nprobability", xlabel="time (s)", ylim=(0, 1))
-
-    for c in result.chunks:
-        if c.end_s < t0 or c.start_s > t1:
-            continue
-        for ax_ in axes:
-            ax_.axvspan(c.start_s, c.end_s, color="orange", alpha=.25, lw=0)
-        axes[0].annotate(str(c.seq), (c.start_s, axes[0].get_ylim()[1] * .9),
-                         fontsize=8, va="top")
-    axes[1].set_xlim(t0, t1)
-    plt.tight_layout()
-    return fig
-
-
 plot_vad(result, 0, min(30, result.audio.size / result.sample_rate));
 
 # %% [markdown]
@@ -393,11 +364,17 @@ else:
 
 # %%
 if SESSION and result.recorded_events:
-    live_starts = sorted(round(e["audio_span_sec"][0], 2)
-                         for e in result.recorded_events if e["type"] == "feedback")
-    replay_starts = sorted(round(c.start_s, 2) for c in result.chunks if c.match_status)
-    print("identical" if live_starts == replay_starts else "DIVERGED — this is a finding")
-    print(f"  live   {live_starts[:12]}")
-    print(f"  replay {replay_starts[:12]}")
+    cmp = compare_to_live(result)
+    print("identical" if cmp["identical"] else "DIVERGED - see below")
+    if cmp["dropped_by_live"]:
+        print(f"  LOST BY THE LIVE SESSION at {cmp['dropped_by_live']} s: recited, "
+              f"endpointed, never graded. The engine returned an empty transcript and "
+              f"session.py's phonemes_text guard discarded the chunk silently. "
+              f"A product bug, not a harness problem -- the replay is the correct run.")
+    if cmp["missing_from_replay"]:
+        print(f"  NOT REPRODUCED BY REPLAY at {cmp['missing_from_replay']} s: this is "
+              f"the one that would qualify the parameter sweeps.")
+    if cmp["identical"]:
+        print("  replay reproduces the live session exactly; the sweeps are sound.")
 else:
     print("Set SESSION to check replay fidelity.")

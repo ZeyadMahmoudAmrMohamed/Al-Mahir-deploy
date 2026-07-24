@@ -597,6 +597,93 @@ def live_trace(result: ProbeResult) -> list[dict]:
     return rows
 
 
+def plot_vad(result: ProbeResult, t0: float = 0.0, t1: float | None = None):
+    """Waveform, VAD probability and finalized chunks on one shared time axis.
+
+    Lives here rather than in the notebook so the notebook and the batch plotter draw
+    the same figure -- two implementations of "the diagram" would drift apart.
+    """
+    import matplotlib.pyplot as plt
+
+    sr = result.sample_rate
+    t1 = t1 if t1 is not None else result.audio.size / sr
+    a, b = int(t0 * sr), int(t1 * sr)
+    audio = result.audio[a:b]
+    t = np.arange(audio.size) / sr + t0
+    pt = np.arange(result.vad_probs.size) * result.settings.vad_window_samples / sr
+
+    fig, axes = plt.subplots(
+        2, 1, figsize=(15, 5), sharex=True, gridspec_kw={"height_ratios": [2, 1]}
+    )
+    axes[0].plot(t, audio, lw=0.4)
+    axes[0].set_ylabel("Audio\nwaveform")
+    axes[1].plot(pt, result.vad_probs, lw=1.2)
+    axes[1].axhline(result.settings.vad_threshold, c="orange", lw=1.4)
+    axes[1].set(ylabel="VAD output\nprobability", xlabel="time (s)", ylim=(0, 1))
+
+    for c in result.chunks:
+        if c.end_s < t0 or c.start_s > t1:
+            continue
+        for ax in axes:
+            ax.axvspan(c.start_s, c.end_s, color="orange", alpha=0.25, lw=0)
+        axes[0].annotate(
+            str(c.seq), (c.start_s, axes[0].get_ylim()[1] * 0.85), fontsize=9
+        )
+    axes[1].set_xlim(t0, t1)
+    fig.tight_layout()
+    return fig
+
+
+def save_vad_plots(result: ProbeResult, outdir, window_s: float = 30.0) -> list[Path]:
+    """One PNG per ``window_s`` of the recording. A 4-minute session on one axis is
+    unreadable; 30 s windows keep individual waqf boundaries visible."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    outdir = Path(outdir)
+    outdir.mkdir(parents=True, exist_ok=True)
+    dur = result.audio.size / result.sample_rate
+    written = []
+    for k in range(int(np.ceil(dur / window_s))):
+        fig = plot_vad(result, k * window_s, min((k + 1) * window_s, dur))
+        p = outdir / f"vad_{k:02d}.png"
+        fig.savefig(p, dpi=110)
+        plt.close(fig)
+        written.append(p)
+    return written
+
+
+def compare_to_live(result: ProbeResult) -> dict:
+    """Did the replay reproduce what the live session emitted?
+
+    A divergence does NOT mean the replay is wrong -- it means the two runs disagree,
+    and either may be the faulty one. Observed in practice: the LIVE session dropped a
+    chunk (the remote engine returned an empty transcript, so session.py's
+    `if not transcript.phonemes_text: return None` discarded it silently), and the
+    replay was the correct one. That failure mode is reported separately as
+    ``dropped_by_live`` because it is a product bug, not a harness problem.
+    """
+    live = sorted(
+        round(e["audio_span_sec"][0], 2)
+        for e in result.recorded_events
+        if e.get("type") == "feedback"
+    )
+    rep = sorted(round(c.start_s, 2) for c in result.chunks if c.match_status)
+    return {
+        "identical": live == rep,
+        "live": live,
+        "replay": rep,
+        # In the replay but not live: the live session endpointed it and produced no
+        # feedback -- words the reciter said and got no verdict for.
+        "dropped_by_live": [x for x in rep if x not in live],
+        # In live but not the replay: genuine replay infidelity. This is the one that
+        # would qualify the parameter sweeps.
+        "missing_from_replay": [x for x in live if x not in rep],
+    }
+
+
 def _self_check() -> None:
     """Replay a captured session and assert it reproduces the recorded boundaries."""
     import sys

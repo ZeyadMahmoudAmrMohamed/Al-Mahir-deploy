@@ -118,7 +118,10 @@ def test_health_reports_capture_availability(capture_client):
 
 def test_health_reports_capture_unavailable_without_a_dir(monkeypatch):
     monkeypatch.setenv("TAJWID_ASR_ENGINE", "mock")
-    monkeypatch.delenv("TAJWID_CAPTURE_DIR", raising=False)
+    # Set empty rather than delete: `backend/.env` may define TAJWID_CAPTURE_DIR on a
+    # developer's machine, and pydantic-settings reads it, so deleting the process env
+    # var does not disable capture. An explicit "" outranks the .env and is falsy.
+    monkeypatch.setenv("TAJWID_CAPTURE_DIR", "")
     from tajwid.config import get_settings
     from tajwid.main import create_app
 
