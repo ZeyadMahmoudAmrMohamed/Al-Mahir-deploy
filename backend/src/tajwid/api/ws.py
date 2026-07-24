@@ -6,7 +6,12 @@ Protocol (all text messages are JSON):
     first message   {"type": "start", "sura": 1, "aya": 1, "word_idx": 0,
                      "strictness": "normal"?, "moshaf": {...}?, "include_units": false?,
                      "engine": "zipformer"?, "rules": ["aared_madd", "ghonna"]?,
-                     "live": true?}
+                     "live": true?, "capture": true?}
+                    "capture" asks the server to record this session's raw input for
+                    offline replay (see capture.py). A REQUEST, not a command: a server
+                    started without TAJWID_CAPTURE_DIR records nothing and says so in
+                    the "session" ack's "capture" field, which is the source of truth
+                    for whether recording actually happened.
                     "live" opts this session into (or out of) the provisional word-fill
                     tier. Omitted defers to the server's TAJWID_LIVE_FEEDBACK. It can
                     only turn the tier OFF: the tier still requires a zipformer build
@@ -58,6 +63,7 @@ import uuid
 import numpy as np
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+from ..capture import open_capture
 from ..config import get_settings
 from ..feedback.types import Span
 from ..session import LiveSession, resolve_moshaf
@@ -132,6 +138,24 @@ async def ws_session(websocket: WebSocket) -> None:
         live=cfg.get("live"),
     )
 
+    # Diagnostic capture. Double-gated (see capture.open_capture): this is None unless
+    # the operator set TAJWID_CAPTURE_DIR *and* the reciter asked. Placed here, after
+    # the session is built, so `resolved` records what the server actually chose rather
+    # than what the client requested -- an engine fallback or a rejected moshaf is
+    # exactly the thing a replay needs to reproduce.
+    capture = open_capture(get_settings(), cfg, session_id)
+    if capture is not None:
+        capture.start(
+            cfg,
+            {
+                "engine": getattr(engine, "name", "unknown"),
+                "moshaf": moshaf.model_dump(),
+                "strictness": session.state.strictness,
+                "rules": sorted(session.state.rules) if session.state.rules else None,
+                "live": session._live is not None,
+            },
+        )
+
     await websocket.send_text(
         json.dumps(
             {
@@ -139,11 +163,17 @@ async def ws_session(websocket: WebSocket) -> None:
                 "session_id": session_id,
                 "engine": getattr(engine, "name", "unknown"),
                 "sample_rate": get_settings().sample_rate,
+                # What ACTUALLY happens, not what was asked for: a client that
+                # requested capture on a server without a capture directory gets
+                # False here, and can say so instead of believing it has a recording.
+                "capture": capture is not None,
             }
         )
     )
 
     async def send_events(events: list[dict]) -> None:
+        if capture is not None:
+            capture.events(events)
         for e in events:
             await websocket.send_text(json.dumps(e, ensure_ascii=False))
 
@@ -157,6 +187,8 @@ async def ws_session(websocket: WebSocket) -> None:
             text = message.get("text")
 
             if data is not None:
+                if capture is not None:
+                    capture.frame(data)
                 samples = _pcm16_to_float(data)
                 events = await asyncio.to_thread(session.feed, samples)
                 await send_events(events)
@@ -177,6 +209,8 @@ async def ws_session(websocket: WebSocket) -> None:
     except WebSocketDisconnect:
         pass
     finally:
+        if capture is not None:
+            capture.close()
         try:
             await websocket.close()
         except RuntimeError:

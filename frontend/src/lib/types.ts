@@ -136,7 +136,16 @@ export type ProgressEvent = {
 };
 
 export type SessionEvent =
-  | { type: "session"; session_id: string; engine: string; sample_rate: number }
+  | {
+      type: "session";
+      session_id: string;
+      engine: string;
+      sample_rate: number;
+      /** Whether this session is ACTUALLY being recorded (see backend capture.py).
+       *  False when the reciter asked but the server has no capture directory — so
+       *  the app can say so rather than believe it has a recording. */
+      capture: boolean;
+    }
   | FeedbackEvent
   | ProgressEvent
   | { type: "done" };
@@ -157,6 +166,8 @@ export type HealthInfo = {
   status: string;
   engine: string;
   available_engines: string[];
+  /** Whether this server was started with TAJWID_CAPTURE_DIR. */
+  capture_available: boolean;
   device: string;
   dtype: string;
   muaalem_model: string;

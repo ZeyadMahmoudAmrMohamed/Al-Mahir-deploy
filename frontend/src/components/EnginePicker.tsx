@@ -11,6 +11,9 @@ export function EnginePicker({
   available,
   live,
   onLiveChange,
+  capture,
+  onCaptureChange,
+  captureAvailable,
   locked,
   onClose,
 }: {
@@ -21,6 +24,11 @@ export function EnginePicker({
   available: Set<string> | null;
   live: boolean;
   onLiveChange: (on: boolean) => void;
+  capture: boolean;
+  onCaptureChange: (on: boolean) => void;
+  /** Whether the server can record at all (/health's capture_available); null while
+   *  that request is in flight, so nothing is disabled on a guess. */
+  captureAvailable: boolean | null;
   /** A session is running. Both settings are read at session start, so changing one
    *  mid-recitation would silently do nothing — say so instead of lying. */
   locked: boolean;
@@ -86,6 +94,33 @@ export function EnginePicker({
             الوضع التفاعلي
           </span>
           <span className="enginemenu__hint">{liveHint}</span>
+        </button>
+
+        {/* Diagnostic recording. Kept apart from the live switch because it is not a
+            recitation setting at all — it changes nothing about the feedback, it only
+            asks the server to keep the audio for later review. Disabled rather than
+            hidden when the server cannot record, so the reason is visible. */}
+        <button
+          className="enginemenu__opt"
+          role="menuitemcheckbox"
+          aria-checked={capture && captureAvailable !== false && !locked}
+          disabled={captureAvailable === false || locked}
+          onClick={() => onCaptureChange(!capture)}
+        >
+          <span className="enginemenu__label">
+            <span
+              className="enginemenu__dot"
+              data-on={capture && captureAvailable !== false && !locked}
+            />
+            وضع التشخيص
+          </span>
+          <span className="enginemenu__hint">
+            {locked
+              ? "أوقف التلاوة لتغيير هذا الإعداد"
+              : captureAvailable === false
+                ? "غير متاح على هذا الخادم"
+                : "يحفظ صوت التلاوة لمراجعتها لاحقًا"}
+          </span>
         </button>
       </div>
     </>

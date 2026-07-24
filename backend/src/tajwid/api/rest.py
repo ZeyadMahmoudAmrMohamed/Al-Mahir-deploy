@@ -262,6 +262,10 @@ def health(request: Request) -> dict:
         "status": "healthy",
         "engine": getattr(engine, "name", "unknown"),
         "available_engines": sorted(engines.keys()),
+        # Whether this server was started with a capture directory. The Diagnose
+        # toggle greys itself out when this is false, so the reciter is never offered
+        # a recording the server would silently drop.
+        "capture_available": bool(s.capture_dir),
         "device": s.device,
         "dtype": s.dtype_str,
         "muaalem_model": s.muaalem_model_id,

@@ -26,8 +26,10 @@ import { cueMistake } from "./lib/cue";
 import {
   labelFor,
   loadHealth,
+  loadStoredCapture,
   loadStoredEngineChoice,
   loadStoredLive,
+  storeCapture,
   storeEngineChoice,
   storeLive,
 } from "./lib/engines";
@@ -72,6 +74,12 @@ export default function App() {
   const [liveMode, setLiveMode] = useState<boolean | null>(loadStoredLive);
   const [strictness, setStrictness] = useState(loadStrictness);
 
+  // Diagnostic recording. Persisted, because a diagnosis is several recitations and
+  // re-arming it each time is friction — but it defaults OFF for a reciter who has
+  // never turned it on. Recording is never something you arrive at by accident.
+  const [capture, setCapture] = useState(loadStoredCapture);
+  const [captureAvailable, setCaptureAvailable] = useState<boolean | null>(null);
+
   const chooseEngine = useCallback((choice: EngineChoice) => {
     setEngineChoice(choice);
     storeEngineChoice(choice);
@@ -80,6 +88,11 @@ export default function App() {
   const chooseLive = useCallback((on: boolean) => {
     setLiveMode(on);
     storeLive(on);
+  }, []);
+
+  const chooseCapture = useCallback((on: boolean) => {
+    setCapture(on);
+    storeCapture(on);
   }, []);
 
   const session = useRef<RecitationSession | null>(null);
@@ -95,6 +108,7 @@ export default function App() {
       .then((h) => {
         const avail = new Set(h.available_engines);
         setAvailableEngines(avail);
+        setCaptureAvailable(h.capture_available ?? false);
         // The stored/default pick might not exist on THIS server (no GPU, say) —
         // Zipformer is always built (see main.py's build_engines), so it's the one
         // safe fallback to land on rather than silently keep an unusable choice.
@@ -169,15 +183,26 @@ export default function App() {
             setToast(`تعذّر تشغيل «${labelFor(engineChoice)}»؛ يعمل الآن بمحرك ${labelFor(engine)}.`);
           }
         },
+        // What the SERVER says is happening, not what we asked for — a request the
+        // server could not honour must not look like a successful recording.
+        onSession: ({ sessionId, capture: recording }) => {
+          if (!capture) return;
+          setToast(
+            recording
+              ? `وضع التشخيص: يُسجَّل باسم ${sessionId}`
+              : "وضع التشخيص غير مُفعَّل على هذا الخادم؛ لن يُحفَظ التسجيل.",
+          );
+        },
       },
       moshaf,
       rules,
       strictness,
       liveMode,
+      capture,
     );
     session.current = s;
     await s.start(cursor, engineChoice);
-  }, [cursor, onFeedback, onProgress, engineChoice, moshaf, rules, strictness, liveMode]);
+  }, [cursor, onFeedback, onProgress, engineChoice, moshaf, rules, strictness, liveMode, capture]);
 
   const stop = useCallback(async () => {
     await session.current?.stop();
@@ -416,6 +441,9 @@ export default function App() {
           available={availableEngines}
           live={liveMode ?? true}
           onLiveChange={chooseLive}
+          capture={capture}
+          onCaptureChange={chooseCapture}
+          captureAvailable={captureAvailable}
           locked={status !== "idle"}
           onClose={() => setEnginePickerOpen(false)}
         />

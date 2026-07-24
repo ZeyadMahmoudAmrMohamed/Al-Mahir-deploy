@@ -91,6 +91,27 @@ export function storeLive(on: boolean): void {
   }
 }
 
+const CAPTURE_KEY = "tajwid.capture";
+
+/** The reciter's saved Diagnose pick. Unlike live mode there is no "defer to the
+ *  server" state: recording is a deliberate act, so an absent preference is OFF, not
+ *  a question for the server to answer. */
+export function loadStoredCapture(): boolean {
+  try {
+    return localStorage.getItem(CAPTURE_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+export function storeCapture(on: boolean): void {
+  try {
+    localStorage.setItem(CAPTURE_KEY, String(on));
+  } catch {
+    /* private mode — the setting just won't persist */
+  }
+}
+
 let healthPromise: Promise<HealthInfo> | null = null;
 
 /** Which engines this server actually built (see /health's available_engines). */

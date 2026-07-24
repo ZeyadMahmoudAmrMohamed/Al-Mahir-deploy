@@ -79,13 +79,29 @@ class Settings(BaseSettings):
     # --- Streaming endpointing (silero VAD gate) -------------------------
     # silero v4 operates on fixed 1536-sample windows (~96 ms at 16 kHz).
     vad_window_samples: int = 1536
-    # Speech-probability threshold. 0.6 (not 0.3) so the shallow, short dips at a waqf
+    # Speech-probability threshold. 0.5 (not 0.3) so the shallow, short dips at a waqf
     # in continuous recitation register as silence.
-    vad_threshold: float = 0.6
+    vad_threshold: float = 0.5
     # A silence run at least this long *after* speech finalizes a chunk (a waqf).
     min_silence_endpoint_ms: int = 300
     # Discard finalized speech shorter than this as noise (breaths/clicks).
     min_speech_ms: int = 200
+    # Energy hangover, in dB above the running noise floor.
+    #
+    # silero is a LEARNED speech/non-speech classifier trained on conversational speech,
+    # not an energy gate. A sustained Quranic madd followed by a ghunnah nasal is nearly
+    # stationary -- steady pitch, no formant transitions -- and reads as out-of-
+    # distribution: measured on real sessions its probability falls to 0.15 while the
+    # audio is still 34-42 dB above the noise floor. The chunk then ends mid-word and the
+    # remainder is orphaned (excluded from this chunk, too short to become its own).
+    # Observed on 9 of 70 chunks across 8 sessions, losing up to 1090 ms -- the final
+    # ـين of ٱلضَّآلِّينَ, among others.
+    #
+    # While in speech, a window silero calls silence is NOT counted toward the endpoint
+    # while its energy is still this far above the floor. True silence measures 0-7 dB
+    # above the floor, so 20 dB separates the two cases with ~13 dB of headroom on each
+    # side. Set 0 to disable and get the pre-hangover behaviour exactly.
+    vad_hangover_db: float = 20.0
     # Hard cap per chunk: the Muaalem model was trained on <=20 s waqf segments.
     max_chunk_s: float = 19.0
     # Padding added around a finalized speech region before inference (see stream.py).
@@ -102,6 +118,14 @@ class Settings(BaseSettings):
     # Costs proportionally more inference per chunk -- measure before raising it.
     # See FINDINGS.md.
     chunk_overlap_ms: int = 0
+
+    # --- Diagnostic capture (see capture.py) -----------------------------
+    # Directory under which a diagnosed session's raw input is recorded for offline
+    # replay. None (the default) disables capture UNCONDITIONALLY -- a client asking
+    # for `capture: true` on a server without this set records nothing. Both keys are
+    # required so a deployed instance cannot be made to record by a crafted client
+    # message, and never records without the reciter asking.
+    capture_dir: str | None = None
 
     # --- Live word-fill (Tier 1: provisional per-word feedback before the waqf) ---
     # Read the streaming-zipformer partial this often (ms) to fill words in live. The
