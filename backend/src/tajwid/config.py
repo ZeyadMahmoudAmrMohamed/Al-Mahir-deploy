@@ -79,9 +79,9 @@ class Settings(BaseSettings):
     # --- Streaming endpointing (silero VAD gate) -------------------------
     # silero v4 operates on fixed 1536-sample windows (~96 ms at 16 kHz).
     vad_window_samples: int = 1536
-    # Speech-probability threshold. 0.6 (not 0.3) so the shallow, short dips at a waqf
+    # Speech-probability threshold. 0.5 (not 0.3) so the shallow, short dips at a waqf
     # in continuous recitation register as silence.
-    vad_threshold: float = 0.6
+    vad_threshold: float = 0.5
     # A silence run at least this long *after* speech finalizes a chunk (a waqf).
     min_silence_endpoint_ms: int = 300
     # Discard finalized speech shorter than this as noise (breaths/clicks).
