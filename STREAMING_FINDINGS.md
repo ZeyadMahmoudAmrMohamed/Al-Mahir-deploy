@@ -312,13 +312,33 @@ Carrying forward `FINDINGS.md`'s list, plus this round's.
 
 ## Next
 
-1. **Turn on `chunk_overlap_ms`.** It is the fix that matches the diagnosis: it makes a
-   boundary word *interior* to the next chunk, where the model decodes it with full
-   right-context instead of none. `FINDINGS.md` already measured it fixing grey
-   (27.6% → 3.9%) and already built the dedup + waqf handling that make it safe. This
-   round adds the reason it also fixes the *last-letter* complaint. Set
-   `TAJWID_CHUNK_OVERLAP_MS=2700` and re-measure `prob_drop` — the prediction is that the
-   8/23 chunks dropping > 0.1 fall sharply, because those groups stop being final.
+1. **Turn on `chunk_overlap_ms=2700`.** Measured on `A_processed`, real engine, one
+   variable:
+
+   | | overlap 0 | overlap 2700 |
+   |---|---|---|
+   | chunks with `prob_drop` > 0.1 | 8/23 | 6/23 |
+   | max `prob_drop` | 0.796 | 0.477 |
+   | median `final_group_prob` | 0.959 | 0.891 |
+   | **grey words** | 13.4% | **0.0%** |
+   | **correct** | 78.0% | **89.1%** |
+   | error | 4.7% | 6.2% |
+
+   **A prediction this document made, and got wrong.** The earlier draft predicted
+   `prob_drop` would fall sharply because the affected groups "stop being final". It
+   barely moved (8 → 6), and median final-group confidence got *worse*. Of course it
+   did: overlap does not stop a chunk's last group from being last. Chunk N still ends
+   with no right-context, it merely ends somewhere else.
+
+   **The fix works through a different mechanism than the one predicted.** The boundary
+   word is re-decoded as an *interior* word of chunk N+1, with full right-context, and
+   `lib/marks.ts` keeps the scored verdict over the unverified one. That is a word-level
+   win a per-chunk metric cannot see: grey 13.4% → 0.0%, correct 78% → 89%. Error rising
+   is the expected accounting — ~13% of words moved from unverified to verified, and
+   unverified was never a claim of correctness (`FINDINGS.md` makes the same point).
+
+   The diagnosis stands; the causal chain runs through *re-decoding the word*, not
+   through *improving the chunk's tail*.
 2. **Do not change `mic.ts`.** §1 — the proposed `new AudioContext()` is a regression on
    every Chrome client, with rate-dependent damage in both directions.
 3. **Consider a lookahead hold on the authoritative tier.** The live tier already refuses
