@@ -77,3 +77,131 @@ def test_scored_chunks_carry_the_model_output(result):
         # The cursor is captured BEFORE analyse_session advances it, so re-running
         # track() offline searches from where the aligner actually searched.
         assert c.cursor_before is not None
+
+
+# --- Replay -------------------------------------------------------------------
+
+
+def _make_capture(tmp_path):
+    """Drive a mock session through the REAL WS handler, so the capture is genuine
+    rather than a fixture that happens to have the right filenames."""
+    import json
+    import os
+
+    from fastapi.testclient import TestClient
+
+    from tajwid.asr.batch import load_audio
+    from tajwid.config import get_settings
+
+    os.environ["TAJWID_ASR_ENGINE"] = "mock"
+    os.environ["TAJWID_CAPTURE_DIR"] = str(tmp_path)
+    get_settings.cache_clear()
+
+    from tajwid.main import create_app
+
+    wave = load_audio(ASSET, 16000).numpy()
+    pcm = (np.clip(wave, -1, 1) * 32767).astype("<i2")
+    with TestClient(create_app()) as c:
+        with c.websocket_connect("/ws/session") as ws:
+            ws.send_text(
+                json.dumps(
+                    {
+                        "type": "start",
+                        "sura": 1,
+                        "aya": 1,
+                        "word_idx": 0,
+                        "capture": True,
+                    }
+                )
+            )
+            ack = json.loads(ws.receive_text())
+            for i in range(0, len(pcm), 1600):
+                ws.send_bytes(pcm[i : i + 1600].tobytes())
+            ws.send_text(json.dumps({"type": "end"}))
+            while json.loads(ws.receive_text()).get("type") != "done":
+                pass
+    return tmp_path / ack["session_id"]
+
+
+@pytest.fixture(scope="module")
+def capture_dir(tmp_path_factory):
+    from tajwid.config import get_settings
+
+    d = _make_capture(tmp_path_factory.mktemp("cap"))
+    yield d
+    get_settings.cache_clear()
+
+
+def test_replay_reproduces_the_captured_chunk_boundaries(capture_dir):
+    from probe_stream import replay
+
+    r = replay(capture_dir)
+    recorded = [e for e in r.recorded_events if e["type"] == "feedback"]
+    assert r.chunks, "the capture should contain at least one chunk"
+    assert recorded, "the live session should have scored at least one chunk"
+
+    live_starts = sorted(round(e["audio_span_sec"][0], 2) for e in recorded)
+    replay_starts = sorted(round(c.start_s, 2) for c in r.chunks if c.match_status)
+    assert replay_starts == live_starts
+
+
+def test_replay_restores_the_captured_settings(capture_dir):
+    from probe_stream import replay
+
+    from tajwid.config import Settings
+
+    r = replay(capture_dir)
+    assert r.settings.sample_rate == 16000
+    assert r.settings.vad_threshold == Settings().vad_threshold
+
+
+def test_replay_honours_a_settings_override(capture_dir):
+    """The whole point of replay: re-run the same audio under different parameters.
+
+    Asserted on `chunk_lead_pad_ms` rather than `vad_threshold` because its effect is
+    arithmetic and therefore guaranteed -- `stream._extract` starts the chunk at
+    `speech_start - lead_pad`, so doubling the pad MUST move the start by exactly that
+    much. A `vad_threshold` change is only guaranteed to move a boundary on audio with
+    a soft onset, and test.wav is one clean utterance whose silero probability jumps at
+    onset: the override reaches the pipeline (checked below) but has nothing to bite on.
+    Testing the plumbing on an asset that cannot exercise it would be a test that passes
+    for the wrong reason.
+    """
+    from probe_stream import replay, settings_from_capture
+
+    base = replay(capture_dir)
+    padded = replay(
+        capture_dir, settings=settings_from_capture(capture_dir, chunk_lead_pad_ms=600)
+    )
+
+    assert base.settings.chunk_lead_pad_ms == 120
+    assert padded.settings.chunk_lead_pad_ms == 600
+    assert len(padded.chunks) == len(base.chunks)
+    moved = base.chunks[0].start_s - padded.chunks[0].start_s
+    # 600 ms - 120 ms = 480 ms earlier, unless clamped by the start of the recording.
+    assert moved == pytest.approx(min(0.48, base.chunks[0].start_s), abs=0.02)
+
+
+def test_settings_override_reaches_the_vad(capture_dir):
+    """`vad_threshold` is plumbed through to the endpointer, whatever the audio does
+    with it."""
+    from probe_stream import replay, settings_from_capture
+
+    loose = replay(
+        capture_dir, settings=settings_from_capture(capture_dir, vad_threshold=0.05)
+    )
+    assert loose.settings.vad_threshold == 0.05
+
+
+def test_replay_splits_at_the_recorded_frame_boundaries(capture_dir):
+    """Frame boundaries are load-bearing, not bookkeeping: sherpa's streaming decode
+    depends on how audio was handed to accept_waveform."""
+    import json
+
+    from probe_stream import _read_capture
+
+    audio, sizes, cfg, events = _read_capture(capture_dir)
+    assert sizes, "frames.jsonl must not be empty"
+    assert sum(sizes) == audio.size
+    assert cfg["resolved"]["engine"] == "mock"
+    assert any(e["type"] == "feedback" for e in events)

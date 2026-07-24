@@ -197,3 +197,119 @@ def probe(
     events.extend(session.flush())
 
     return _assemble(audio, sr, probe_vad, endpointed, seen, events, s)
+
+
+# --- Replaying a captured session ----------------------------------------------
+
+
+def _read_capture(session_dir) -> tuple[np.ndarray, list[int], dict, list[dict]]:
+    """Read the four capture files: audio, frame sizes, start config, recorded events."""
+    d = Path(session_dir)
+    with wavemod.open(str(d / "input.wav"), "rb") as w:
+        if w.getsampwidth() != 2 or w.getnchannels() != 1:
+            raise ValueError("capture must be 16-bit mono")
+        raw = w.readframes(w.getnframes())
+    audio = np.frombuffer(raw, dtype="<i2").astype(np.float32) / 32768.0
+
+    sizes = [
+        json.loads(line)["n"]
+        for line in (d / "frames.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    cfg = json.loads((d / "start.json").read_text(encoding="utf-8"))
+
+    events_path = d / "events.jsonl"
+    events = (
+        [
+            json.loads(line)
+            for line in events_path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        if events_path.exists()
+        else []
+    )
+    return audio, sizes, cfg, events
+
+
+def settings_from_capture(session_dir, **overrides) -> Settings:
+    """The captured session's settings, with any field overridden.
+
+    This is what makes a sweep possible: the same recitation re-run at a different
+    vad_threshold, trail pad or overlap. Fields absent from the capture fall back to
+    this process's own environment.
+    """
+    _, _, cfg, _ = _read_capture(session_dir)
+    return Settings(**{**cfg.get("settings", {}), **overrides})
+
+
+def replay(session_dir, *, settings: Settings | None = None, engine=None) -> ProbeResult:
+    """Re-run a captured session, frame boundary for frame boundary.
+
+    Splitting at the RECORDED boundaries is not fussiness: sherpa's streaming decode
+    depends on how audio was handed to ``accept_waveform``, so re-splitting the same
+    bytes at a different size changes the live tier's output. The authoritative tier
+    would survive it; the thing under investigation would not.
+
+    ``recorded_events`` carries what the LIVE session emitted, so the replay can be
+    CHECKED rather than trusted -- Muaalem on a remote GPU is the one component that
+    may not be bit-exact, and a divergence is a finding rather than an embarrassment.
+    """
+    from tajwid.asr.engine import make_engine
+    from tajwid.session import LiveSession
+
+    audio, sizes, cfg, recorded = _read_capture(session_dir)
+    s = settings or Settings(**cfg.get("settings", {}))
+    sr = s.sample_rate
+
+    raw_cfg = cfg.get("cfg", {})
+    start = (
+        Span(
+            sura=int(raw_cfg["sura"]),
+            aya=int(raw_cfg["aya"]),
+            word_idx=int(raw_cfg.get("word_idx", 0)),
+        )
+        if "sura" in raw_cfg and "aya" in raw_cfg
+        else None
+    )
+
+    session = LiveSession(
+        engine or make_engine(),
+        session_id=Path(session_dir).name,
+        start=start,
+        settings=s,
+    )
+    probe_vad, endpointed, seen = _instrument(session)
+
+    events: list[dict] = []
+    pos = 0
+    for n in sizes:
+        events.extend(session.feed(audio[pos : pos + n]))
+        pos += n
+    if pos < audio.size:  # a tail the capture never got to record a boundary for
+        events.extend(session.feed(audio[pos:]))
+    events.extend(session.flush())
+
+    result = _assemble(audio, sr, probe_vad, endpointed, seen, events, s)
+    result.recorded_events = recorded
+    return result
+
+
+def _self_check() -> None:
+    """Replay a captured session and assert it reproduces the recorded boundaries."""
+    import sys
+
+    if len(sys.argv) < 2:
+        raise SystemExit("usage: python probe_stream.py <capture_session_dir>")
+    r = replay(sys.argv[1])
+    recorded = sorted(
+        round(e["audio_span_sec"][0], 2)
+        for e in r.recorded_events
+        if e["type"] == "feedback"
+    )
+    got = sorted(round(c.start_s, 2) for c in r.chunks if c.match_status)
+    assert got == recorded, f"replay diverged:\n  live   {recorded}\n  replay {got}"
+    print(f"OK - {len(r.chunks)} chunks, boundaries match the recorded session")
+
+
+if __name__ == "__main__":
+    _self_check()
