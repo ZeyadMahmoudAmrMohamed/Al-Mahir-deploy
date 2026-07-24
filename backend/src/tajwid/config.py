@@ -104,15 +104,18 @@ class Settings(BaseSettings):
     chunk_overlap_ms: int = 0
 
     # --- Live word-fill (Tier 1: provisional per-word feedback before the waqf) ---
-    # Re-decode the growing utterance this often (ms) to fill words in live. Gated to
-    # the real/remote engines in LiveSession — mock fabricates phonemes and zipformer
-    # has no acoustic confidence, so neither drives live-fill.
+    # Read the streaming-zipformer partial this often (ms) to fill words in live. The
+    # live tier is a COMPANION to the authoritative grade, so it is gated to sessions
+    # graded by Muaalem (real/remote) — a mock or zipformer grader gets no live tier.
     live_feedback: bool = True
     live_interval_ms: int = 300
     # Words held back from the END of each live match: the last word(s) of a
     # decode-so-far are still in flight (the reciter may be mid-madd), committed only
     # once later audio stabilises them.
     live_lookahead_words: int = 1
+    # Words of expected context the live matcher aligns against, from the anchor forward.
+    # A waqf re-anchor arrives well before an utterance could exhaust this.
+    live_window_words: int = 40
 
     # --- W2V-BERT segmenter (chunker for the offline whole-file batch path) ---
     segmenter_batch_size: int = 8
