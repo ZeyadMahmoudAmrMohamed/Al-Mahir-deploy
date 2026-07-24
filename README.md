@@ -295,7 +295,9 @@ server → client
 On the `real`/`remote` engines a provisional **live word-fill** runs alongside the waqf
 pipeline: a `progress` event (coordinates only, never a verdict) fills words in every
 ~300 ms as they are recited, and the waqf `feedback` remains the authoritative grade that
-reconciles them — see [API.md](API.md) §5.4a.
+reconciles them — see [API.md](API.md) §5.4a. The provisional tier is a local streaming
+zipformer on CPU, decoupled from wherever Muaalem grades and re-anchored to the
+authoritative cursor at each waqf.
 
 `feedback` is a `FeedbackResponse` (see `tajwid/feedback/types.py`): every word of the
 matched span, in order, each with its Tanzil coordinates, `uthmani`, a `status`

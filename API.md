@@ -451,6 +451,11 @@ A `progress` event carries **no errors, no phonemes, no ṣifāt**. Never render
 it; all criticism comes from `feedback`. `mock` and `zipformer` sessions never send it. A
 client that ignores `progress` degrades to today's pause-only behavior.
 
+The word-fill is produced by a CPU streaming model (zipformer) running locally on the
+server, independent of the grading engine, so it stays responsive even when Muaalem grades
+on a remote GPU. It is re-anchored to the authoritative cursor at every waqf, which is why
+it carries coordinates only and is always reconciled by the next `feedback`.
+
 ### 5.5 Word status, and the three rules you must follow
 
 These are contract requirements, not styling suggestions. The engine deliberately declines
