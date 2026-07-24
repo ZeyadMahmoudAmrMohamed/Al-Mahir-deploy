@@ -35,9 +35,7 @@ from .asr.transcribe import ChunkTranscript
 from .asr.vad import load_vad
 from .config import Settings, get_settings
 from .feedback.confidence import STRICTNESS
-from .feedback.nonverse import strip_non_verse
 from .feedback.pipeline import analyse_session
-from .feedback.track import confirmed_and_skipped
 from .feedback.rules import catalogue
 from .feedback.session import SessionState
 from .feedback.types import (
@@ -165,6 +163,7 @@ class LiveSession:
         include_units: bool = False,
         rules: frozenset[str] | None = None,
         settings: Settings | None = None,
+        zipformer_engine: object | None = None,
     ):
         self.s = settings or get_settings()
         self.engine = engine
@@ -185,14 +184,22 @@ class LiveSession:
         self._prev_end: Optional[Span] = None
         self._prev_forced = False
 
-        # Tier 1 (live word-fill): a running buffer of the current, not-yet-finalized
-        # utterance, re-decoded every `live_interval_samples` to fill words in before the
-        # waqf. Gated to engines that actually hear (real/remote); mock/zipformer stay off.
-        self._live_buffer = np.zeros(0, dtype=np.float32)
+        # Tier 1 (streaming-zipformer live word-fill). Companion-only: on iff enabled,
+        # zipformer was built (files present), and the grader is Muaalem (real/remote).
+        # The live tier does NOT go through `engine` — it owns its own CPU-local stream,
+        # so it stays responsive even when Muaalem grades on a remote GPU.
+        self._live = None
         self._samples_since_live = 0
-        self._live_enabled = bool(self.s.live_feedback) and getattr(
-            engine, "name", ""
-        ) in ("real", "remote")
+        if (
+            self.s.live_feedback
+            and zipformer_engine is not None
+            and getattr(engine, "name", "") in ("real", "remote")
+        ):
+            from .asr.live_aligner import LiveAligner
+
+            self._live = LiveAligner(zipformer_engine._recognizer, self.s)
+            if start is not None:
+                self._live.reanchor(start)
 
     # -- public API -------------------------------------------------------
     def feed(self, samples: np.ndarray) -> list[dict]:
@@ -200,68 +207,32 @@ class LiveSession:
         interleaved live `progress` events (Tier 1)."""
         events: list[dict] = []
         fins = self.stream.feed(samples)
-        self._live_buffer = np.concatenate(
-            [self._live_buffer, np.asarray(samples, dtype=np.float32).reshape(-1)]
-        )
+        if self._live is not None:
+            self._live.feed(samples)
         for fin in fins:
             if e := self._process(fin):
                 events.append(e)
         if fins:
-            # A waqf finalized: Tier 2 authoritatively graded this audio. Drop the live
-            # buffer so the next utterance's provisional decode starts clean.
-            # ponytail: clears the WHOLE buffer, so a few ms of the next utterance already
-            # captured past the endpoint is dropped and simply rebuilt by the next frames —
-            # a provisional view Tier 2 re-grades from real audio regardless.
-            self._live_buffer = np.zeros(0, dtype=np.float32)
+            # A waqf was graded; re-anchor the live tier to the authoritative cursor.
+            if self._live is not None and self.state.cursor is not None:
+                self._live.reanchor(self.state.cursor)
             self._samples_since_live = 0
-        elif self._live_enabled:
+        elif self._live is not None:
             self._samples_since_live += int(np.asarray(samples).size)
             if self._samples_since_live >= self.s.live_interval_samples:
                 self._samples_since_live = 0
                 try:
-                    if pe := self._live_progress():
-                        events.append(pe)
+                    confirmed, skipped = self._live.progress()
+                    if confirmed or skipped:
+                        events.append(self._live_event(confirmed, skipped))
                 except Exception as err:  # noqa: BLE001 — the provisional tier is a
                     # nicety; a failure in it must never take down the session or block
                     # the authoritative feedback. Drop this tick and carry on.
                     logger.warning("Live word-fill tick failed; skipping it: %r", err)
         return events
 
-    def _live_progress(self) -> dict | None:
-        """Re-decode the current utterance so far and report the words provisionally
-        reached (and any clean skip). Provisional: coordinates only, never a verdict."""
-        import torch
-
-        if self.state.cursor is None or self._live_buffer.size < self.s.min_speech_samples:
-            return None
-        # ponytail: O(n^2) — re-decodes from utterance start each tick, <=19 s of audio,
-        # fine on a real GPU. Ceiling: bound to the last few seconds / cache encoder
-        # states if a long single-breath recitation ever measures too slow.
-        sr = self.s.sample_rate
-        ctx = ChunkContext(
-            duration_s=self._live_buffer.size / sr,
-            cursor=self.state.cursor,
-            moshaf=self.state.moshaf,
-        )
-        transcript = self.engine.transcribe_chunk(
-            torch.from_numpy(self._live_buffer), sr, ctx
-        )
-        if not transcript.phonemes_text:
-            return None
-        verse_ph, _nv, _s0, _e0 = strip_non_verse(
-            transcript.phonemes_text, self.state.moshaf
-        )
-        if not verse_ph:
-            return None
-        confirmed, skipped = confirmed_and_skipped(
-            verse_ph,
-            self.state.cursor,
-            self.state.moshaf,
-            lookahead_words=self.s.live_lookahead_words,
-            penalty=self.state.penalty,
-        )
-        if not confirmed and not skipped:
-            return None
+    def _live_event(self, confirmed: list[Span], skipped: list[Span]) -> dict:
+        """Provisional: coordinates only, never a verdict."""
         tip = confirmed[-1] if confirmed else self.state.cursor
         return {
             "type": "progress",
@@ -277,6 +248,8 @@ class LiveSession:
     def seek(self, span: Span) -> None:
         """The user repositioned (picked a different sura/aya). Reset the cursor."""
         self.state = replace(self.state, cursor=span, penalty=0)
+        if self._live is not None:
+            self._live.reanchor(span)
 
     @property
     def cursor(self) -> Optional[Span]:

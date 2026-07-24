@@ -35,9 +35,11 @@ Protocol (all text messages are JSON):
                                                        (see tajwid.session.LiveSession).
     {"type":"progress", "confirmed":[...], "skipped":[...], "cursor":{...}|null}
                                                        provisional live word-fill (Tier 1),
-                                                       real/remote engines only. Coordinates
-                                                       only — never a verdict. Reconciled by
-                                                       the next "feedback".
+                                                       from a CPU-local streaming zipformer,
+                                                       sent only when the grading engine is
+                                                       real/remote. Coordinates only — never
+                                                       a verdict. Reconciled by the next
+                                                       "feedback".
     {"type":"done"}                                    after the end-of-stream flush.
 """
 
@@ -120,6 +122,7 @@ async def ws_session(websocket: WebSocket) -> None:
         strictness=cfg.get("strictness"),
         include_units=bool(cfg.get("include_units", False)),
         rules=rules,
+        zipformer_engine=engines.get("zipformer"),
     )
 
     await websocket.send_text(

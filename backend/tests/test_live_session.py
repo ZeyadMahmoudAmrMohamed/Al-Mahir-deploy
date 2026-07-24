@@ -13,7 +13,12 @@ import numpy as np
 import pytest
 
 from tajwid.asr.batch import load_audio, stream_file
-from tajwid.asr.engine import _MAX_MOCK_WORDS, ChunkContext, MockEngine
+from tajwid.asr.engine import (
+    _MAX_MOCK_WORDS,
+    ChunkContext,
+    MockEngine,
+    _zipformer_files_present,
+)
 from tajwid.config import Settings
 from tajwid.feedback.types import Span
 from tajwid.session import LiveSession, transcript_to_output
@@ -122,66 +127,67 @@ def test_perfect_recitation_is_never_accused(mock_engine):
     assert not [w for w in feedback.words if w.status == "error"]
 
 
-# --- Tier 1 live word-fill ---------------------------------------------------
-
-_AL_FATIHA_1_5 = "ءِييَااكَنَعبُدُوَءِييَااكَنَستَعِۦۦۦۦن"
+# --- Tier 1 gating (streaming-zipformer live tier) ---------------------------
 
 
-class _FakeLiveEngine:
-    """A real-named engine that ignores the audio and returns a fixed transcript, so the
-    live-decode wiring can be exercised on CPU with no model."""
+class _FakeRealEngine:
+    """A Muaalem-named grader that hears nothing. The live tier no longer routes audio
+    through the grading engine, so the gate can be exercised with a hollow stand-in."""
 
     name = "real"
 
-    def __init__(self, phonemes: str):
-        self._ph = phonemes
-
     def transcribe_chunk(self, wave, sample_rate, ctx=None):
-        from quran_transcript import chunck_phonemes
         from tajwid.asr.transcribe import ChunkTranscript
 
-        groups = chunck_phonemes(self._ph)
         return ChunkTranscript(
-            phonemes_text=self._ph,
-            char_probs=[1.0] * len(self._ph),
-            groups=groups,
-            group_probs=[1.0] * len(groups),
-            sifat=[],
+            phonemes_text="", char_probs=[], groups=[], group_probs=[], sifat=[]
         )
 
 
-def test_live_progress_fills_words_before_a_pause():
-    # Pin live_feedback explicitly so an ambient .env/TAJWID_LIVE_FEEDBACK can't disable
-    # the very path under test (init kwargs outrank env sources in pydantic-settings).
+def test_no_live_tier_without_a_zipformer_engine():
+    # Pin live_feedback explicitly so an ambient .env/TAJWID_LIVE_FEEDBACK can't be what
+    # disables the tier (init kwargs outrank env sources in pydantic-settings).
     s = Settings(asr_engine="real", live_feedback=True)
     sess = LiveSession(
-        _FakeLiveEngine(_AL_FATIHA_1_5),
+        _FakeRealEngine(),
         session_id="t",
-        start=Span(sura=1, aya=5, word_idx=0),
+        start=Span(sura=1, aya=1, word_idx=0),
         settings=s,
+        zipformer_engine=None,
     )
-    # Silence: silero finds no speech, so nothing finalizes and the live path fires on
-    # the interval counter. Length must clear both the interval and min_speech gates.
-    frame = np.zeros(s.live_interval_samples + s.min_speech_samples, dtype=np.float32)
-    events = sess.feed(frame)
-
-    progress = [e for e in events if e["type"] == "progress"]
-    assert progress, "a progress event should fire once past the live interval"
-    confirmed = progress[-1]["confirmed"]
-    assert confirmed, "confirmed words expected"
-    assert {"sura": 1, "aya": 5, "word_idx": 0} in confirmed
-    # Provisional events assert nothing negative about pronunciation.
-    assert "words" not in progress[-1]
+    assert sess._live is None
 
 
-def test_mock_engine_emits_no_live_progress(mock_engine):
-    # Force live_feedback on so this proves the ENGINE gate (mock is off), not that an
-    # ambient TAJWID_LIVE_FEEDBACK=false happened to disable everything.
+def test_no_live_tier_on_mock_even_with_zipformer(mock_engine):
+    # Companion-only: a mock/zipformer grader gets no live tier regardless of zipformer.
     s = Settings(asr_engine="mock", live_feedback=True)
-    sess = LiveSession(mock_engine, session_id="t", start=Span(sura=1, aya=1, word_idx=0), settings=s)
-    frame = np.zeros(s.live_interval_samples + s.min_speech_samples, dtype=np.float32)
-    events = sess.feed(frame)
-    assert not [e for e in events if e.get("type") == "progress"], "mock must not drive live-fill"
+    sentinel = object()  # a non-None "zipformer engine" that must still be ignored
+    sess = LiveSession(
+        mock_engine,
+        session_id="t",
+        start=Span(sura=1, aya=1, word_idx=0),
+        settings=s,
+        zipformer_engine=sentinel,
+    )
+    assert sess._live is None
+
+
+@pytest.mark.skipif(
+    not _zipformer_files_present(Settings()), reason="zipformer model files absent"
+)
+def test_live_tier_built_on_real_with_zipformer():
+    from tajwid.asr.engine import ZipformerAsrEngine
+
+    s = Settings(asr_engine="real", live_feedback=True)
+    zf = ZipformerAsrEngine(settings=s)
+    sess = LiveSession(
+        _FakeRealEngine(),
+        session_id="t",
+        start=Span(sura=1, aya=1, word_idx=0),
+        settings=s,
+        zipformer_engine=zf,
+    )
+    assert sess._live is not None
 
 
 def test_process_survives_a_feedback_analysis_crash(mock_engine, monkeypatch):
