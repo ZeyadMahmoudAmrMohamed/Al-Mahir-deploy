@@ -25,10 +25,13 @@ r = probe('scripts/A_processed.wav', start=Span(sura=2,aya=282,word_idx=0))
 print(tail_report(r))"
 ```
 
-**Status: the acoustic half is complete; the model half is not.** The Kaggle GPU tunnel
-went offline mid-investigation, so every number below is either engine-independent (VAD,
-audio, resampling) or was produced under the mock engine and is labelled as such. See
-[Pending](#pending--needs-the-real-engine).
+**Status: complete.** Acoustic numbers are engine-independent; model numbers came from
+Muaalem on a Tesla T4 over the remote tunnel.
+
+**The headline:** the boundary complaint is real, but it is **not** the chunker cutting
+audio. It is the model being uncertain about its *last phoneme group* because a chunk end
+has no right-context. The two witnesses disagree with correlation **−0.24**, which is what
+localises the fault. See [§2](#2-vad-and-chunking--the-boundary-complaint).
 
 ---
 
@@ -182,18 +185,61 @@ catchable by the synthetic tests, which pass under both semantics.
 **A measurement that loudly agrees with the hypothesis it was built to test is the one to
 distrust most.** Both of these did.
 
-### Where to look instead
+### The second witness — and it points somewhere else
 
-The complaint is real as an *experience*; it is not acoustic truncation. The remaining
-candidates, in order:
+Muaalem on the T4, `prob_drop` = chunk-median group confidence minus the **final** group's:
 
-1. **The model's tail confidence** — needs the real engine (see Pending). If the final
-   phoneme group's CTC probability collapses while the audio is demonstrably present,
-   the loss is in inference, not chunking.
-2. **`trim_edges` greying the boundary word** (`words.py:138`) — a greyed word *looks*
-   missing. `FINDINGS.md` measured this at 27.6% of words before overlap. This is the
-   likeliest explanation for the reported experience and it is already understood.
-3. **The alignment tier dropping the word**, not the chunker cutting it.
+| | chunks | final_group_prob median | min | prob_drop median | max | chunks dropping >0.1 |
+|---|---|---|---|---|---|---|
+| `A_processed` | 23 | 0.959 | **0.000** | 0.000 | **0.796** | **8 (35%)** |
+| `B_raw` | 20 | 0.944 | 0.279 | 0.021 | 0.718 | 5 (25%) |
+
+Interior groups sit at a median **0.986**. So on roughly a third of chunks the model is
+markedly unsure of the last thing it emitted — one chunk's final group scored **0.000**.
+
+**But it does not line up with the audio.** Correlation between `tail_gap_ms` (strict) and
+`prob_drop` is **−0.237** — if anything, *negative*. Mean `prob_drop` is 0.104 on chunks
+whose audio is fully contained and *lower* on the handful that overrun.
+
+The worst case makes it concrete:
+
+```
+seq forced gap15 gap25 final medn drop  final_group
+  8 False   1390    10 0.189 0.986 0.796  'ج'
+  1 False   2000     0 0.645 0.991 0.347  'ممم'
+  9 False   1430     0 0.666 0.986 0.320  'مم'
+ 19 False   2000     0 0.736 0.993 0.257  'بُ'
+ 11 False      0     0 0.793 0.993 0.200  'ك'
+```
+
+Chunk 8's audio is acoustically complete — 10 ms of overrun against a 240 ms pad — and the
+model still assigns 0.189 to its final ج.
+
+### Verdict — right-context starvation, not truncation
+
+**The reciter's complaint is real. The cause is not the chunker.** A CTC acoustic model
+needs *future* frames to be confident about a phoneme. At a chunk boundary there are none:
+the last group is decoded with the least context of anything in the chunk, so its
+posterior is diffuse regardless of how much silence was padded after it. The failing final
+groups are exactly what that predicts — consonants and nasals (ج، م، ب، ك، ل، ي), where the
+distinguishing cue lies in the *following* transition.
+
+Padding more audio cannot fix this: 240 ms of trailing silence adds no phonetic
+right-context, only silence. This is the problem `whisper_streaming` and `SimulStreaming`
+solve with **LocalAgreement** — never commit the last token(s) until a later, longer window
+confirms them.
+
+Two mechanisms in this codebase already implement that shape and are worth pointing at:
+
+- **`chunk_overlap_ms`** (`config.py:104`, currently **0**) — re-sends the tail so the
+  boundary word is *interior* next time, decoded with full right-context.
+- **`live_lookahead_words`** (`config.py:115`) — the live tier already holds back its last
+  word for exactly this reason (`live_aligner.py:44`). The authoritative tier has no
+  equivalent.
+
+`trim_edges` greying the boundary word (`words.py:138`) remains a *separate* contributor to
+the same felt experience — a greyed word looks missing too — and `FINDINGS.md` measured it
+at 27.6% before overlap.
 
 ---
 
@@ -218,29 +264,32 @@ scores nearly the same — that is the length search being smooth, not ambiguity
 as the runner-up would report a near-zero margin for every chunk and make the metric
 worthless.
 
-**No margin numbers are reported here.** Under the mock engine the predicted phonemes are
-fabricated *from the reference at the cursor*, so `track()` matches perfectly by
-construction and every margin is optimistic. Publishing those would be worse than
-publishing nothing.
+### Measured, real engine
+
+| file | chunks traced | status | best_ratio median / min | margin median / min | won by < 0.05 |
+|---|---|---|---|---|---|
+| `A_processed.wav` | 23/23 | **100% `ok`** | 0.977 / 0.276 | 0.130 / 0.018 | 2 |
+| `dussary_002282.mp3` | 16/16 | **100% `ok`** | 1.000 / 0.848 | 0.103 / 0.017 | 1 |
+
+**Alignment is not a problem.** Every chunk located, no `ambiguous`, no `no_match`, and the
+studio recitation matches its reference *exactly* (ratio 1.000) more often than not. The
+learner's 0.977 median is the ASR's error rate showing through, not a tracking failure.
+
+Margins are comfortable: the winning span beats the best candidate at a different start by
+0.13 typically. Three chunks across both files won by < 0.05 and are the only ones where
+the window is genuinely ambiguous — worth a look if a mislocation is ever reported, but
+they all still resolved `ok`.
 
 ---
 
-## Pending — needs the real engine
+## Replay fidelity
 
-The Kaggle tunnel returned `ERR_NGROK_3200` (endpoint offline) partway through. These
-three items are instrumented and ready; they need a live GPU and nothing else.
-
-1. **Tail confidence.** `tail_report`'s `prob_drop` — the final phoneme group's CTC
-   confidence against the chunk median (`contract.py:45` already carries it). Under mock
-   every group reports 0.97, so the column is meaningless. This is the *second witness*
-   for §2 and the most likely place the boundary complaint actually lives.
-2. **Alignment margins.** §3's distribution, and the count of chunks won by < 0.05.
-3. **Replay fidelity.** Whether a remote-GPU replay reproduces `events.jsonl` bit for bit,
-   or whether float nondeterminism moves boundaries. If it diverges, the sweep methodology
-   is qualified and that is itself a finding.
-
-To run: restart the Kaggle server, update `TAJWID_REMOTE_URL` in `backend/.env`, then
-`TAJWID_ASR_ENGINE=remote jupytext --to notebook experiments/streaming_flow.py` and execute.
+Not yet measured against a **remote-GPU** capture — it needs a session recorded through
+Diagnose while the tunnel is up. Under the mock engine replay reproduces the live chunk
+boundaries exactly (`test_replay_reproduces_the_captured_chunk_boundaries`). The open
+question is only whether T4 float nondeterminism moves a boundary; if it does, the
+parameter sweeps are qualified and that is itself a finding. The notebook's last cell
+checks it automatically once `SESSION` points at a real capture.
 
 ---
 
@@ -263,12 +312,21 @@ Carrying forward `FINDINGS.md`'s list, plus this round's.
 
 ## Next
 
-1. **Restore the GPU and close the three Pending items.** Nothing else is blocked.
+1. **Turn on `chunk_overlap_ms`.** It is the fix that matches the diagnosis: it makes a
+   boundary word *interior* to the next chunk, where the model decodes it with full
+   right-context instead of none. `FINDINGS.md` already measured it fixing grey
+   (27.6% → 3.9%) and already built the dedup + waqf handling that make it safe. This
+   round adds the reason it also fixes the *last-letter* complaint. Set
+   `TAJWID_CHUNK_OVERLAP_MS=2700` and re-measure `prob_drop` — the prediction is that the
+   8/23 chunks dropping > 0.1 fall sharply, because those groups stop being final.
 2. **Do not change `mic.ts`.** §1 — the proposed `new AudioContext()` is a regression on
-   every Chrome client, with rate-dependent damage.
-3. **Re-examine the boundary complaint as a greying problem, not a cutting one**
-   (`feedback/words.py:138`). `FINDINGS.md`'s chunk-overlap work already addresses it and
-   is implemented but off by default (`chunk_overlap_ms=0`). Turning it on is a
-   one-variable experiment the replay harness can now run on a real captured session.
-4. **Record a native-rate learner sample** via `scripts/record_ab.html` if §1 needs to be
-   settled on a real reciter's voice rather than on studio audio.
+   every Chrome client, with rate-dependent damage in both directions.
+3. **Consider a lookahead hold on the authoritative tier.** The live tier already refuses
+   to commit its last word (`live_lookahead_words`, `live_aligner.py:44`); the Muaalem
+   tier has no equivalent and confidently emits a group it scored 0.189. This is the
+   `whisper_streaming` / `SimulStreaming` LocalAgreement idea, and overlap is the cheap
+   version of it. Try overlap first.
+4. **Record with Diagnose while the GPU is up** to close replay fidelity, and run the
+   sweeps on a real reciter's own session.
+5. **Record a native-rate learner sample** via `scripts/record_ab.html` if §1 needs to be
+   settled on a reciter's voice rather than on studio audio.
