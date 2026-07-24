@@ -142,6 +142,14 @@ def watch(notebook: bool, poll_s: float = 3.0) -> None:
 
 
 def main() -> None:
+    # Line-buffer stdout. Python block-buffers when it is not a terminal, so
+    # `--watch > log.txt` (or any redirect, which is how a watcher is usually run)
+    # shows nothing for minutes and looks hung.
+    try:
+        sys.stdout.reconfigure(line_buffering=True)
+    except AttributeError:  # pragma: no cover - very old Python
+        pass
+
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("session", nargs="?", help="capture dir (default: the newest)")
     ap.add_argument("--notebook", action="store_true", help="also execute the notebook")
@@ -154,9 +162,11 @@ def main() -> None:
 
     d = Path(args.session) if args.session else newest_capture()
     if d is None:
+        # ASCII only: a redirected Windows console is cp1252 and would raise
+        # UnicodeEncodeError on Arabic, turning "no captures yet" into a crash.
         raise SystemExit(
             f"No captures in {CAPTURES}. Start the server with TAJWID_CAPTURE_DIR set "
-            f"and turn on وضع التشخيص."
+            f"and turn the Diagnose toggle on."
         )
     analyse(d, notebook=args.notebook)
 
