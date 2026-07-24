@@ -454,6 +454,149 @@ def tail_report(result: ProbeResult) -> list[dict]:
     return rows
 
 
+# --- Alignment tracing ---------------------------------------------------------
+#
+# Two alignment algorithms run concurrently and answer different questions:
+#
+#   authoritative  feedback/track.py     Muaalem, per waqf chunk, GRID SEARCH over
+#                                        offsets [-6,+30) x lengths [len/9, len/2+1],
+#                                        argmax Levenshtein ratio, may move backwards
+#   live           asr/live_aligner.py   zipformer, every 300 ms, single forward PREFIX
+#                                        scan, forward-only, stalls rather than guess
+#
+# Both are pure functions, so both are re-run here on captured inputs rather than
+# instrumented in place. No production code is edited.
+
+
+def track_grid(
+    phonemes: str,
+    cursor: Span,
+    moshaf,
+    overlap_words: int = 6,
+    window_words: int = 30,
+    penalty: int = 0,
+) -> dict:
+    """Re-run track()'s grid, keeping EVERY cell instead of only the argmax.
+
+    ``margin`` is the point of this. track() reports a confident win and a coin-flip
+    identically, as a plain `ok`, but they are different failures needing different
+    fixes: a near-tie means the window is ambiguous (the mutashabihat case track.py:128
+    describes), while a clear win that is still wrong means the phonemes were bad.
+
+    The runner-up is computed over a DIFFERENT start offset. Taking the second-highest
+    CELL would report a near-zero margin for every chunk, because (best_offset,
+    best_n + 1) is the same starting position with one more word and always scores
+    nearly the same -- that is the length search being smooth, not ambiguity.
+    """
+    from tajwid.feedback.locate import _search_engine
+    from tajwid.feedback.track import (
+        _match_ratio,
+        _ordinal_of_word,
+        _slice_by_ordinal,
+        _word_starts,
+    )
+
+    query = _search_engine()._normalize_query(phonemes)
+    cursor_ord = _ordinal_of_word().get((cursor.sura, cursor.aya, cursor.word_idx))
+    if not query or cursor_ord is None:
+        return {
+            "offsets": [],
+            "n_words": [],
+            "ratios": np.zeros((0, 0), dtype=np.float32),
+            "best": None,
+            "best_ratio": 0.0,
+            "runner_up_ratio": 0.0,
+            "margin": 0.0,
+            "query": query,
+        }
+
+    overlap_words += penalty
+    window_words += penalty
+    min_window = max(1, len(query) // 9)
+    max_window = max(min_window, len(query) // 2 + 1)
+    n_total = len(_word_starts())
+
+    offsets = list(range(-overlap_words, window_words))
+    lengths = list(range(min_window, max_window + 1))
+    ratios = np.zeros((len(offsets), len(lengths)), dtype=np.float32)
+
+    for i, offset in enumerate(offsets):
+        start_ord = cursor_ord + offset
+        if start_ord < 0 or start_ord >= n_total:
+            continue
+        for j, n_words in enumerate(lengths):
+            candidate = _slice_by_ordinal(start_ord, n_words)
+            if candidate:
+                ratios[i, j] = _match_ratio(candidate, query)
+
+    if not ratios.size or not ratios.max():
+        best, best_ratio, runner_up = None, 0.0, 0.0
+    else:
+        bi, bj = np.unravel_index(int(ratios.argmax()), ratios.shape)
+        best = (offsets[bi], lengths[bj])
+        best_ratio = float(ratios[bi, bj])
+        per_offset = ratios.max(axis=1)
+        other = np.delete(per_offset, bi)
+        runner_up = float(other.max()) if other.size else 0.0
+
+    return {
+        "offsets": offsets,
+        "n_words": lengths,
+        "ratios": ratios,
+        "best": best,
+        "best_ratio": round(best_ratio, 4),
+        "runner_up_ratio": round(runner_up, 4),
+        "margin": round(best_ratio - runner_up, 4),
+        "query": query,
+    }
+
+
+def live_trace(result: ProbeResult) -> list[dict]:
+    """One row per live `progress` event: what the live tier claimed, and whether it
+    ran ahead of the authoritative cursor.
+
+    Over-confirming is the dangerous direction (live_aligner.py:56): in hidden hifz mode
+    a confirmed word is REVEALED on the page, so a tier running ahead hands the reciter
+    the word they were trying to recall. ``ahead_of_grade`` is that failure, counted.
+    """
+    from tajwid.feedback.track import _ordinal_of_word
+
+    ord_of = _ordinal_of_word()
+
+    def to_ord(w: dict | None) -> int | None:
+        if not w:
+            return None
+        return ord_of.get((w["sura"], w["aya"], w["word_idx"]))
+
+    # The authoritative cursor over time, so a live tick is compared against the grade
+    # that was actually in force when it fired.
+    graded: list[int] = []
+    for c in result.chunks:
+        if c.match_status and c.words:
+            o = to_ord(c.words[-1])
+            if o is not None:
+                graded.append(o)
+
+    rows = []
+    for e in result.live_ticks:
+        tip = to_ord(e.get("cursor"))
+        last_grade = graded[-1] if graded else None
+        rows.append(
+            {
+                "n_confirmed": len(e.get("confirmed") or []),
+                "n_skipped": len(e.get("skipped") or []),
+                "tip_ordinal": tip,
+                "graded_ordinal": last_grade,
+                "ahead_of_grade": (
+                    tip - last_grade
+                    if tip is not None and last_grade is not None
+                    else None
+                ),
+            }
+        )
+    return rows
+
+
 def _self_check() -> None:
     """Replay a captured session and assert it reproduces the recorded boundaries."""
     import sys

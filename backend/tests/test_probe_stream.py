@@ -302,3 +302,83 @@ def test_tail_report_shape(result):
         assert r["tail_gap_ms"] >= 0
         assert r["trail_pad_ms"] == result.settings.chunk_trail_pad_ms
         assert r["cut_short"] == (r["tail_gap_ms"] > r["trail_pad_ms"])
+
+
+# --- Alignment tracing --------------------------------------------------------
+
+
+def test_track_grid_argmax_agrees_with_track():
+    """The instrumented grid must be the SAME algorithm, not a lookalike."""
+    from probe_stream import track_grid
+
+    from tajwid.feedback.track import _ordinal_of_word, _word_of_ordinal, track
+    from tajwid.feedback.types import Span
+    from tajwid.session import default_moshaf
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from conftest import AL_FATIHA_1_5
+
+    cursor = Span(sura=1, aya=4, word_idx=0)
+    moshaf = default_moshaf()
+
+    found = track(AL_FATIHA_1_5, cursor, moshaf)
+    grid = track_grid(AL_FATIHA_1_5, cursor, moshaf)
+
+    assert found.status == "ok"
+    assert grid["best"] is not None
+    assert grid["best_ratio"] == pytest.approx(float(grid["ratios"].max()), abs=1e-6)
+
+    cur_ord = _ordinal_of_word()[(cursor.sura, cursor.aya, cursor.word_idx)]
+    best_offset, _ = grid["best"]
+    assert _word_of_ordinal()[cur_ord + best_offset] == (
+        found.span.sura,
+        found.span.aya,
+        found.span.word_idx,
+    )
+
+
+def test_track_grid_margin_is_against_a_different_start():
+    """Taking the second-highest CELL would report ~0 margin for every chunk, because
+    (best_offset, best_n + 1) is the same start with one more word. The margin has to
+    be against a different PLACE in the mushaf to mean anything."""
+    from probe_stream import track_grid
+
+    from tajwid.feedback.types import Span
+    from tajwid.session import default_moshaf
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from conftest import AL_FATIHA_1_5
+
+    grid = track_grid(AL_FATIHA_1_5, Span(sura=1, aya=4, word_idx=0), default_moshaf())
+    ratios = grid["ratios"]
+    bi, bj = np.unravel_index(int(ratios.argmax()), ratios.shape)
+
+    # The neighbouring length at the SAME offset is near-identical...
+    if bj + 1 < ratios.shape[1]:
+        assert ratios[bi, bj + 1] > 0.5 * ratios[bi, bj]
+    # ...yet the reported margin is not driven by it, because that row is excluded.
+    assert grid["runner_up_ratio"] <= grid["best_ratio"]
+    assert grid["margin"] == pytest.approx(
+        grid["best_ratio"] - grid["runner_up_ratio"], abs=1e-6
+    )
+    # A genuinely unique passage should win clearly.
+    assert grid["margin"] > 0.05
+
+
+def test_track_grid_survives_an_unfindable_cursor():
+    from probe_stream import track_grid
+
+    from tajwid.feedback.types import Span
+    from tajwid.session import default_moshaf
+
+    grid = track_grid("", Span(sura=1, aya=1, word_idx=0), default_moshaf())
+    assert grid["best"] is None
+    assert grid["margin"] == 0.0
+
+
+def test_live_trace_is_empty_without_the_live_tier(result):
+    """The mock grader gets no live tier (session.py gates it to real/remote), so the
+    trace must be empty rather than fabricated."""
+    from probe_stream import live_trace
+
+    assert live_trace(result) == []
