@@ -27,6 +27,13 @@ export type SessionHandlers = {
    * back server-side (see api/ws.py), so this can differ from what `start()` asked for.
    */
   onEngine?: (engine: string) => void;
+  /**
+   * The session id, and whether the server is actually recording this session.
+   * `capture` can be false even when the reciter asked for it — the server records
+   * only when it was started with a capture directory (see backend capture.py), so
+   * this is the field to trust, not the request.
+   */
+  onSession?: (info: { sessionId: string; capture: boolean }) => void;
 };
 
 export type SessionStatus = "idle" | "connecting" | "listening" | "closing";
@@ -60,6 +67,12 @@ export class RecitationSession {
      * a zipformer build and a Muaalem grader, so `true` where neither holds is a no-op.
      */
     private live?: boolean | null,
+    /**
+     * Ask the server to record this session's raw input for offline diagnosis.
+     * A REQUEST, not a command: a server without TAJWID_CAPTURE_DIR records nothing.
+     * The "session" ack's `capture` field is the source of truth.
+     */
+    private capture?: boolean,
   ) {}
 
   async start(from: Span, engine?: EngineChoice): Promise<void> {
@@ -77,7 +90,13 @@ export class RecitationSession {
       const msg: SessionEvent = JSON.parse(e.data);
       if (msg.type === "feedback") this.handlers.onFeedback(msg);
       else if (msg.type === "progress") this.handlers.onProgress?.(msg);
-      else if (msg.type === "session") this.handlers.onEngine?.(msg.engine);
+      else if (msg.type === "session") {
+        this.handlers.onEngine?.(msg.engine);
+        this.handlers.onSession?.({
+          sessionId: msg.session_id,
+          capture: msg.capture,
+        });
+      }
     };
     ws.onclose = () => {
       if (this.status !== "idle") void this.stop();
@@ -111,6 +130,9 @@ export class RecitationSession {
         ...(this.rules != null ? { rules: this.rules } : {}),
         ...(this.strictness ? { strictness: this.strictness } : {}),
         ...(this.live != null ? { live: this.live } : {}),
+        // Omitted when off, so a normal session's wire format stays byte-identical
+        // to what it was before diagnosis existed.
+        ...(this.capture ? { capture: true } : {}),
       }),
     );
 
