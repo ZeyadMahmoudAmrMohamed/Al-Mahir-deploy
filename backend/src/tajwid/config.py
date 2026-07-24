@@ -103,6 +103,14 @@ class Settings(BaseSettings):
     # See FINDINGS.md.
     chunk_overlap_ms: int = 0
 
+    # --- Diagnostic capture (see capture.py) -----------------------------
+    # Directory under which a diagnosed session's raw input is recorded for offline
+    # replay. None (the default) disables capture UNCONDITIONALLY -- a client asking
+    # for `capture: true` on a server without this set records nothing. Both keys are
+    # required so a deployed instance cannot be made to record by a crafted client
+    # message, and never records without the reciter asking.
+    capture_dir: str | None = None
+
     # --- Live word-fill (Tier 1: provisional per-word feedback before the waqf) ---
     # Read the streaming-zipformer partial this often (ms) to fill words in live. The
     # live tier is a COMPANION to the authoritative grade, so it is gated to sessions
