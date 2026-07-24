@@ -214,7 +214,8 @@ server receives is not JSON, it closes the socket with code **1002** and you get
   "engine": "real",
   "rules": ["aared_madd", "ghonna"],
   "moshaf": {"madd_monfasel_len": 4, "madd_aared_len": 2},
-  "include_units": false
+  "include_units": false,
+  "live": true
 }
 ```
 
@@ -308,6 +309,19 @@ fields you did not touch, and you do not need to reconstruct the ones the schema
 An invalid combination (madd al-leen longer than madd al-ʿāriḍ, an out-of-range value) falls
 back to the full default rather than dropping the session. A bad setting costs you the
 setting, not the recitation.
+
+#### `live`
+
+Whether this session runs the provisional live word-fill (§5.4a). Omit it to accept the
+server's own default (`TAJWID_LIVE_FEEDBACK`).
+
+**It can only turn the tier off.** The tier is a companion to a Muaalem grade and still
+requires the local zipformer build plus a `real`/`remote` grading engine, so `true` on a
+server or engine that cannot run it is silently a no-op rather than an error — check for
+`"zipformer"` in `/health`'s `available_engines` if you need to know before asking.
+
+Send `false` for a hifz drill where seeing words appear as you recite would give away the
+passage you are trying to recall.
 
 #### `include_units`
 
@@ -651,24 +665,29 @@ GET /moshaf-schema
 
 ```json
 {"fields": [
-  {"key": "recitation_speed",
-   "name_ar": "سرعة التلاوة",
-   "description": "The recitation speed sorted from slowest to the fastest ...",
-   "default": "murattal",
-   "options": [{"value": "mujawad", "label": "مجود"},
-               {"value": "above_murattal", "label": "فويق المرتل"},
-               {"value": "murattal", "label": "مرتل"},
-               {"value": "hadr", "label": "حدر"}]},
   {"key": "madd_monfasel_len",
    "name_ar": "مد المنفصل",
    "description": "The length of Mad Al Monfasel \"مد النفصل\" for Hafs Rewaya.",
    "default": 2,
    "options": [{"value": 2, "label": "2"}, {"value": 3, "label": "3"},
-               {"value": 4, "label": "4"}, {"value": 5, "label": "5"}]}
+               {"value": 4, "label": "4"}, {"value": 5, "label": "5"}]},
+  {"key": "madd_aared_len",
+   "name_ar": "مد العارض للسكون",
+   "description": "The length of Mad Al Aared \"مد العارض للسكون\".",
+   "default": 4,
+   "options": [{"value": 2, "label": "2"}, {"value": 4, "label": "4"},
+               {"value": 6, "label": "6"}]}
 ]}
 ```
 
-The live response has **37 fields**, covering madd lengths, sakt positions, and the specific
+Two kinds of field are deliberately **not** listed. Fields fixed to a single value
+(`rewaya`, always `hafs`) have nothing to choose. And `recitation_speed` (سرعة التلاوة),
+though `MoshafAttributes` declares it, is read by no code in either half of the pipeline —
+the phonetizer never branches on it and `moshaf` never reaches the acoustic model at all —
+so offering it as a control would promise an effect that never arrives. It is still
+**accepted** on the wire, so a client that stored it earlier keeps working.
+
+The live response has **36 fields**, covering madd lengths, sakt positions, and the specific
 disputed words (`مصر`, `ضعف`, `سلاسلا`, and so on). Build the panel from the response; do not
 hard-code the list.
 

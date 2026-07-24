@@ -213,3 +213,53 @@ def test_process_survives_a_feedback_analysis_crash(mock_engine, monkeypatch):
     # No exception escapes, the chunk is dropped, and the cursor is left untouched.
     assert sess._process(fin) is None
     assert sess.cursor == Span(sura=1, aya=1, word_idx=0)
+
+
+# --- The per-session `live` choice -------------------------------------------
+
+
+def test_resolve_live_defaults_to_the_env_setting():
+    from tajwid.session import resolve_live
+
+    assert resolve_live(None, Settings(live_feedback=True)) is True
+    assert resolve_live(None, Settings(live_feedback=False)) is False
+
+
+def test_resolve_live_honours_an_explicit_choice():
+    from tajwid.session import resolve_live
+
+    # An explicit pick outranks the env default in BOTH directions.
+    assert resolve_live(False, Settings(live_feedback=True)) is False
+    assert resolve_live(True, Settings(live_feedback=False)) is True
+
+
+@pytest.mark.skipif(
+    not _zipformer_files_present(Settings()), reason="zipformer model files absent"
+)
+def test_live_false_turns_the_tier_off_even_when_it_could_run():
+    from tajwid.asr.engine import ZipformerAsrEngine
+
+    s = Settings(asr_engine="real", live_feedback=True)
+    sess = LiveSession(
+        _FakeRealEngine(),
+        session_id="t",
+        start=Span(sura=1, aya=1, word_idx=0),
+        settings=s,
+        zipformer_engine=ZipformerAsrEngine(settings=s),
+        live=False,
+    )
+    assert sess._live is None
+
+
+def test_live_true_cannot_force_the_tier_onto_a_mock_grader(mock_engine):
+    """Companion-only is an invariant, not a default: the client can only turn it OFF."""
+    s = Settings(asr_engine="mock", live_feedback=False)
+    sess = LiveSession(
+        mock_engine,
+        session_id="t",
+        start=Span(sura=1, aya=1, word_idx=0),
+        settings=s,
+        zipformer_engine=object(),
+        live=True,
+    )
+    assert sess._live is None

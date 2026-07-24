@@ -7,6 +7,7 @@ import type {
   RuleSelection,
   SessionEvent,
   Span,
+  Strictness,
 } from "./types";
 
 const WS_URL = () => {
@@ -49,6 +50,16 @@ export class RecitationSession {
      * array is a real choice (hifz and tashkeel only) and IS sent.
      */
     private rules?: RuleSelection,
+    /**
+     * How sure the grader must be before it accuses. Omitted uses the server default.
+     */
+    private strictness?: Strictness | null,
+    /**
+     * Whether to run the provisional live word-fill. Omitted defers to the server's
+     * TAJWID_LIVE_FEEDBACK. This can only turn the tier OFF -- the server still requires
+     * a zipformer build and a Muaalem grader, so `true` where neither holds is a no-op.
+     */
+    private live?: boolean | null,
   ) {}
 
   async start(from: Span, engine?: EngineChoice): Promise<void> {
@@ -98,6 +109,8 @@ export class RecitationSession {
         ...(engine ? { engine } : {}),
         ...(this.moshaf ? { moshaf: this.moshaf } : {}),
         ...(this.rules != null ? { rules: this.rules } : {}),
+        ...(this.strictness ? { strictness: this.strictness } : {}),
+        ...(this.live != null ? { live: this.live } : {}),
       }),
     );
 

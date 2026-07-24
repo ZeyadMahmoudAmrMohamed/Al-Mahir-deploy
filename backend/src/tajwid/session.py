@@ -124,6 +124,22 @@ def resolve_strictness(raw: str | None, settings: Settings | None = None) -> str
     return s.strictness if s.strictness in STRICTNESS else "normal"
 
 
+def resolve_live(raw: bool | None, settings: Settings | None = None) -> bool:
+    """Whether this session wants the provisional live tier.
+
+    Omitted (``None``) defers to ``Settings.live_feedback``, so a client that never sends
+    the field keeps the server's behaviour. An explicit pick outranks it in both
+    directions -- the reciter turning the word-fill off mid-hifz is a real choice, not a
+    malformed config to fall back from.
+
+    This only expresses a WISH. Whether the tier actually runs is still gated on the
+    zipformer being built and the grader being Muaalem (see ``LiveSession.__init__``):
+    the client can turn the tier off, never force it on.
+    """
+    s = settings or get_settings()
+    return s.live_feedback if raw is None else bool(raw)
+
+
 def resolve_rules(
     raw: frozenset[str] | None, settings: Settings | None = None
 ) -> frozenset[str] | None:
@@ -164,6 +180,7 @@ class LiveSession:
         rules: frozenset[str] | None = None,
         settings: Settings | None = None,
         zipformer_engine: object | None = None,
+        live: bool | None = None,
     ):
         self.s = settings or get_settings()
         self.engine = engine
@@ -191,7 +208,7 @@ class LiveSession:
         self._live = None
         self._samples_since_live = 0
         if (
-            self.s.live_feedback
+            resolve_live(live, self.s)
             and zipformer_engine is not None
             and getattr(engine, "name", "") in ("real", "remote")
         ):

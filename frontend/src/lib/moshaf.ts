@@ -1,4 +1,10 @@
-import type { MoshafConfig, MoshafField, RuleSelection, TajweedRuleDef } from "./types";
+import type {
+  MoshafConfig,
+  MoshafField,
+  RuleSelection,
+  Strictness,
+  TajweedRuleDef,
+} from "./types";
 
 // The reciter's moshaf attributes: which madd lengths they hold, which rules they read.
 // The schema is the backend's — introspected from MoshafAttributes — so this file never
@@ -45,6 +51,39 @@ export function saveMoshafConfig(cfg: MoshafConfig | null): void {
   try {
     if (cfg) localStorage.setItem(KEY, JSON.stringify(cfg));
     else localStorage.removeItem(KEY);
+  } catch {
+    /* private mode / disabled storage — the setting just won't persist */
+  }
+}
+
+// --- Strictness ---------------------------------------------------------------
+//
+// How confident the model must be before an error is stated as one. Distinct from
+// leniency below: leniency picks WHICH rules are graded, strictness picks how sure the
+// grader must be to accuse on the rules it does grade. Sent as a top-level start field,
+// NOT inside `moshaf` — it is not a moshaf attribute and the backend would reject it there.
+
+const STRICTNESS_KEY = "tajwid.strictness";
+
+export const STRICTNESS_LEVELS: { id: Strictness; label: string; hint: string }[] = [
+  { id: "lenient", label: "متساهل", hint: "لا يُنبّه إلا على الخطأ الواضح" },
+  { id: "normal", label: "متوسط", hint: "الموازنة الافتراضية" },
+  { id: "strict", label: "صارم", hint: "ينبّه على أدقّ الملاحظات" },
+];
+
+export function loadStrictness(): Strictness | null {
+  try {
+    const v = localStorage.getItem(STRICTNESS_KEY);
+    return STRICTNESS_LEVELS.some((l) => l.id === v) ? (v as Strictness) : null;
+  } catch {
+    return null;
+  }
+}
+
+export function saveStrictness(s: Strictness | null): void {
+  try {
+    if (s) localStorage.setItem(STRICTNESS_KEY, s);
+    else localStorage.removeItem(STRICTNESS_KEY);
   } catch {
     /* private mode / disabled storage — the setting just won't persist */
   }

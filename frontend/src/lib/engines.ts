@@ -53,6 +53,44 @@ export function storeEngineChoice(choice: EngineChoice): void {
   }
 }
 
+// --- Live (responsive) mode ---------------------------------------------------
+//
+// The provisional word-fill tier. It is a COMPANION to the grade, never a replacement:
+// the server runs it only when المُعلِّم is grading AND a zipformer build is present, so
+// this flag can turn it off but can never force it on (see api/ws.py's `live`).
+
+const LIVE_KEY = "tajwid.live";
+
+/** Whether the live tier can run at all here: it needs a local zipformer build, and it
+ *  only accompanies a المُعلِّم grade — picking Zipformer AS the grader leaves nothing
+ *  for it to accompany. `available === null` means /health hasn't answered yet, so
+ *  nothing is judged unavailable on a guess. */
+export function liveAvailable(
+  engine: EngineChoice,
+  available: Set<string> | null,
+): boolean {
+  if (engine === "zipformer") return false;
+  return available === null || available.has("zipformer");
+}
+
+/** The reciter's saved live-mode pick, or null to defer to the server's default. */
+export function loadStoredLive(): boolean | null {
+  try {
+    const v = localStorage.getItem(LIVE_KEY);
+    return v === null ? null : v === "true";
+  } catch {
+    return null;
+  }
+}
+
+export function storeLive(on: boolean): void {
+  try {
+    localStorage.setItem(LIVE_KEY, String(on));
+  } catch {
+    /* private mode — the setting just won't persist */
+  }
+}
+
 let healthPromise: Promise<HealthInfo> | null = null;
 
 /** Which engines this server actually built (see /health's available_engines). */

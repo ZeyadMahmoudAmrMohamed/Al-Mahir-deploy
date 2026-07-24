@@ -5,7 +5,13 @@ Protocol (all text messages are JSON):
   client -> server
     first message   {"type": "start", "sura": 1, "aya": 1, "word_idx": 0,
                      "strictness": "normal"?, "moshaf": {...}?, "include_units": false?,
-                     "engine": "zipformer"?, "rules": ["aared_madd", "ghonna"]?}
+                     "engine": "zipformer"?, "rules": ["aared_madd", "ghonna"]?,
+                     "live": true?}
+                    "live" opts this session into (or out of) the provisional word-fill
+                    tier. Omitted defers to the server's TAJWID_LIVE_FEEDBACK. It can
+                    only turn the tier OFF: the tier still requires a zipformer build
+                    and a Muaalem (`real`/`remote`) grader, so `true` on a server or
+                    engine that cannot run it is silently a no-op, not an error.
                     "rules" is the LENIENCY selection: grade only these tajwid/sifa
                     rules and stay silent about the rest. Keys come from
                     `GET /tajweed-rules`. Omitted or null grades everything (the
@@ -123,6 +129,7 @@ async def ws_session(websocket: WebSocket) -> None:
         include_units=bool(cfg.get("include_units", False)),
         rules=rules,
         zipformer_engine=engines.get("zipformer"),
+        live=cfg.get("live"),
     )
 
     await websocket.send_text(

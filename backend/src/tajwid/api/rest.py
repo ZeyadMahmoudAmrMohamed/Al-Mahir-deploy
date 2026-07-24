@@ -28,6 +28,16 @@ def _literal_values(annotation) -> list:
     return values
 
 
+# Declared by MoshafAttributes but read by NO code in either half of the pipeline, so
+# offering them as controls would promise an effect that never arrives.
+#   recitation_speed (سرعة التلاوة): the phonetizer never branches on it, and `moshaf`
+#   does not reach the acoustic model at all -- it only feeds reference derivation. It is
+#   a leftover from the quran_transcript DATASET schema, where it labelled style.
+# Still ACCEPTED on the wire (see session.resolve_moshaf), so a stored client config that
+# carries one keeps working; this only stops advertising it.
+_INERT_FIELDS = frozenset({"recitation_speed"})
+
+
 @router.get(
     "/moshaf-schema",
     tags=["recitation"],
@@ -93,6 +103,8 @@ def moshaf_schema() -> dict:
 
     fields = []
     for name, f in MoshafAttributes.model_fields.items():
+        if name in _INERT_FIELDS:
+            continue
         values = _literal_values(f.annotation)
         if len(values) < 2:
             continue  # nothing to choose (e.g. rewaya is fixed to hafs)

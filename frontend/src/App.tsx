@@ -17,11 +17,20 @@ import { MistakesSheet, MoshafSheet, SearchSheet } from "./components/Sheets";
 import {
   loadMoshafConfig,
   loadRuleSelection,
+  loadStrictness,
   saveMoshafConfig,
   saveRuleSelection,
+  saveStrictness,
 } from "./lib/moshaf";
 import { cueMistake } from "./lib/cue";
-import { labelFor, loadHealth, loadStoredEngineChoice, storeEngineChoice } from "./lib/engines";
+import {
+  labelFor,
+  loadHealth,
+  loadStoredEngineChoice,
+  loadStoredLive,
+  storeEngineChoice,
+  storeLive,
+} from "./lib/engines";
 import { accuracy, applyFeedback, applyProgress, emptyMarks, mistakesOnPage } from "./lib/marks";
 import { PAGES, loadPageReady, loadSuraIndex, pageOf, spanKey, wordKey } from "./lib/mushaf";
 import { RecitationSession, type SessionStatus } from "./lib/session";
@@ -58,9 +67,19 @@ export default function App() {
   const [activeEngine, setActiveEngine] = useState<string | null>(null);
   const [enginePickerOpen, setEnginePickerOpen] = useState(false);
 
+  // null = defer to the server's TAJWID_LIVE_FEEDBACK until the reciter expresses a
+  // preference. Only ever turns the tier OFF; the server still gates it (see ws.py).
+  const [liveMode, setLiveMode] = useState<boolean | null>(loadStoredLive);
+  const [strictness, setStrictness] = useState(loadStrictness);
+
   const chooseEngine = useCallback((choice: EngineChoice) => {
     setEngineChoice(choice);
     storeEngineChoice(choice);
+  }, []);
+
+  const chooseLive = useCallback((on: boolean) => {
+    setLiveMode(on);
+    storeLive(on);
   }, []);
 
   const session = useRef<RecitationSession | null>(null);
@@ -153,10 +172,12 @@ export default function App() {
       },
       moshaf,
       rules,
+      strictness,
+      liveMode,
     );
     session.current = s;
     await s.start(cursor, engineChoice);
-  }, [cursor, onFeedback, onProgress, engineChoice, moshaf, rules]);
+  }, [cursor, onFeedback, onProgress, engineChoice, moshaf, rules, strictness, liveMode]);
 
   const stop = useCallback(async () => {
     await session.current?.stop();
@@ -393,6 +414,9 @@ export default function App() {
           choice={engineChoice}
           onChoose={chooseEngine}
           available={availableEngines}
+          live={liveMode ?? true}
+          onLiveChange={chooseLive}
+          locked={status !== "idle"}
           onClose={() => setEnginePickerOpen(false)}
         />
       )}
@@ -466,11 +490,15 @@ export default function App() {
         <MoshafSheet
           value={moshaf}
           rules={rules}
-          onSave={(cfg, sel) => {
+          strictness={strictness}
+          locked={status !== "idle"}
+          onSave={(cfg, sel, str) => {
             setMoshaf(cfg);
             saveMoshafConfig(cfg);
             setRules(sel);
             saveRuleSelection(sel);
+            setStrictness(str);
+            saveStrictness(str);
             setToast(
               cfg || sel
                 ? "حُفظت خصائص التلاوة — تُطبَّق على الجلسة التالية."

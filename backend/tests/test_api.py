@@ -120,3 +120,19 @@ def test_ws_session_unknown_engine_falls_back_to_default(client):
         assert hello["engine"] == "mock"
         ws.send_json({"type": "end"})
         ws.receive_json()
+
+
+def test_moshaf_schema_hides_the_inert_recitation_speed(client):
+    """It is declared by MoshafAttributes but read by nothing; offering it as a control
+    would promise an effect that never arrives."""
+    keys = [f["key"] for f in client.get("/moshaf-schema").json()["fields"]]
+    assert "recitation_speed" not in keys
+    assert "madd_monfasel_len" in keys, "the real grading knobs must still be listed"
+
+
+def test_a_config_carrying_recitation_speed_is_still_accepted():
+    """Hiding it must not break a client that stored it before."""
+    from tajwid.session import resolve_moshaf
+
+    m = resolve_moshaf({"recitation_speed": "hadr", "madd_monfasel_len": 5})
+    assert m.madd_monfasel_len == 5, "the rest of the config must survive"

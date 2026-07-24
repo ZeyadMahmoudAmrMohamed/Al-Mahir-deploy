@@ -149,6 +149,10 @@ export type SessionEvent =
  */
 export type EngineChoice = "real" | "zipformer" | "remote";
 
+/** How confident the model must be before it accuses. Mirrors the backend's STRICTNESS
+ *  table (feedback/confidence.py): lenient accuses least, strict accuses most. */
+export type Strictness = "lenient" | "normal" | "strict";
+
 export type HealthInfo = {
   status: string;
   engine: string;

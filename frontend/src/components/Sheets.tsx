@@ -1,6 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { CloseIcon } from "./Icons";
-import { defaultConfig, loadMoshafSchema, loadRuleCatalogue } from "../lib/moshaf";
+import {
+  STRICTNESS_LEVELS,
+  defaultConfig,
+  loadMoshafSchema,
+  loadRuleCatalogue,
+} from "../lib/moshaf";
 import { searchAyahs } from "../lib/search";
 import type {
   MistakeLog,
@@ -8,6 +13,7 @@ import type {
   MoshafField,
   RuleSelection,
   SearchResult,
+  Strictness,
   SuraInfo,
   TajweedRuleDef,
 } from "../lib/types";
@@ -299,13 +305,24 @@ const kindLabel = (k?: string) =>
 export function MoshafSheet({
   value,
   rules,
+  strictness,
+  locked,
   onSave,
   onClose,
 }: {
   value: MoshafConfig | null;
   /** The leniency selection; null = every rule graded. */
   rules: RuleSelection;
-  onSave: (cfg: MoshafConfig | null, rules: RuleSelection) => void;
+  /** How sure the grader must be before it accuses; null = the server's default. */
+  strictness: Strictness | null;
+  /** A session is running. Every setting here is read at session start, so a change
+   *  now would silently do nothing until the next one. */
+  locked: boolean;
+  onSave: (
+    cfg: MoshafConfig | null,
+    rules: RuleSelection,
+    strictness: Strictness | null,
+  ) => void;
   onClose: () => void;
 }) {
   const [fields, setFields] = useState<MoshafField[] | null>(null);
@@ -313,6 +330,7 @@ export function MoshafSheet({
   const [cfg, setCfg] = useState<MoshafConfig>({});
   const [catalogue, setCatalogue] = useState<TajweedRuleDef[] | null>(null);
   const [sel, setSel] = useState<RuleSelection>(rules);
+  const [strict, setStrict] = useState<Strictness | null>(strictness);
 
   useEffect(() => {
     let live = true;
@@ -345,16 +363,17 @@ export function MoshafSheet({
     });
 
   const apply = () => {
-    onSave(cfg, sel);
+    onSave(cfg, sel, strict);
     onClose();
   };
   const useModelDefault = () => {
-    onSave(null, null); // no moshaf, no narrowing — the backend's own defaults
+    onSave(null, null, null); // no moshaf, no narrowing — the backend's own defaults
     onClose();
   };
   const resetShown = () => {
     if (fields) setCfg(defaultConfig(fields));
     setSel(null);
+    setStrict(null);
   };
 
   return (
@@ -380,8 +399,38 @@ export function MoshafSheet({
         ) : (
           <>
             <p className="moshaf__hint">
-              تُطبَّق هذه الخصائص على الجلسة التالية، وتُضبط بها مطابقة التجويد لطريقة قراءتك.
+              {locked
+                ? "التلاوة جارية — أوقفها لتغيير هذه الإعدادات، فهي تُقرأ عند بدء الجلسة."
+                : "تُطبَّق هذه الخصائص على الجلسة التالية، وتُضبط بها مطابقة التجويد لطريقة قراءتك."}
             </p>
+
+            {/* Strictness. NOT a moshaf attribute — a moshaf field says how the reciter
+                reads, this says how sure the grader must be before calling something a
+                mistake. Sent as a top-level start field, so it renders as its own
+                section rather than being folded into the schema list. */}
+            <div className="moshaf__field">
+              <label
+                className="moshaf__label"
+                title="أدنى ثقة يقبلها النموذج قبل أن يُثبِت الخطأ"
+              >
+                شدّة التقييم
+              </label>
+              <div className="moshaf__opts" role="group" aria-label="شدّة التقييم">
+                {STRICTNESS_LEVELS.map((l) => (
+                  <button
+                    key={l.id}
+                    className={`moshaf__opt${strict === l.id ? " moshaf__opt--on" : ""}`}
+                    aria-pressed={strict === l.id}
+                    title={l.hint}
+                    disabled={locked}
+                    onClick={() => setStrict(l.id)}
+                  >
+                    {l.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
             {fields.map((f) => (
               <div className="moshaf__field" key={f.key}>
                 <label className="moshaf__label" title={f.description ?? undefined}>
@@ -393,6 +442,7 @@ export function MoshafSheet({
                       key={String(o.value)}
                       className={`moshaf__opt${cfg[f.key] === o.value ? " moshaf__opt--on" : ""}`}
                       aria-pressed={cfg[f.key] === o.value}
+                      disabled={locked}
                       onClick={() => set(f.key, o.value)}
                     >
                       {o.label}

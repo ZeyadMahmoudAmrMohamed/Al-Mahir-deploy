@@ -772,6 +772,14 @@ button {
   cursor: not-allowed;
 }
 
+/* Divides the engine radios from the live-mode switch below them — they answer
+   different questions (which model grades vs. whether the companion tier runs). */
+.enginemenu__sep {
+  height: 1px;
+  margin: 0.4rem 0.2rem;
+  background: rgba(255, 255, 255, 0.09);
+}
+
 .enginemenu__label {
   display: flex;
   align-items: center;
